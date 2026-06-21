@@ -1367,13 +1367,14 @@ function SpiceFlagChip({ name }) {
 // ============================================================
 // SHOP TAB
 // ============================================================
-function ShopTab({ plan, recipes, pantry }) {
+function ShopTab({ plan, recipes, pantry, setPantry }) {
   const [shopItems, setShopItems] = useState([]);
   const [floorItems, setFloorItems] = useState([]);
   const [groupBy, setGroupBy] = useState("category");
   const [manualName, setManualName] = useState("");
   const [manualQty, setManualQty] = useState("");
   const [generated, setGenerated] = useState(false);
+  const [stockedMsg, setStockedMsg] = useState("");
 
   function doGenerate() {
     setShopItems(generateShoppingList(plan, recipes, pantry).map((x, i) => ({ ...x, id: "s" + i })));
@@ -1387,6 +1388,53 @@ function ShopTab({ plan, recipes, pantry }) {
     if (!manualName.trim()) return;
     setShopItems(p => [...p, { id: "m" + uid(), name: manualName.trim(), qty: manualQty || "1", unit: "", category: guessCategory(manualName), store: "", checked: false, source: "manual" }]);
     setManualName(""); setManualQty("");
+  }
+
+  // Flow all checked items into pantry inventory. Existing items get their
+  // quantity increased (unit-aware: convert into the pantry item's unit when
+  // families match; otherwise leave the pantry qty and just note it). New
+  // items are created. Checked items are then removed from the list.
+  function stockChecked() {
+    const checked = [
+      ...shopItems.filter(i => i.checked),
+      ...floorItems.filter(i => i.checked),
+    ];
+    if (checked.length === 0) return;
+
+    setPantry(prev => {
+      const next = prev.map(p => ({ ...p }));
+      for (const item of checked) {
+        const qtyNum = parseFloat(item.qty) || 0;
+        const existing = next.find(p => normalize(p.name) === normalize(item.name));
+        if (existing) {
+          const iInfo = unitInfo(item.unit);
+          const pInfo = unitInfo(existing.unit);
+          if (item.unit && existing.unit && iInfo.family === pInfo.family) {
+            // add converted into pantry's unit
+            const addBase = qtyNum * iInfo.factor;
+            existing.qty = round1(existing.qty + addBase / pInfo.factor);
+          } else if (!item.unit || !existing.unit || item.unit === existing.unit) {
+            existing.qty = round1(existing.qty + qtyNum);
+          } else {
+            // unit families differ and both set — can't safely combine; bump by raw count
+            existing.qty = round1(existing.qty + qtyNum);
+          }
+        } else {
+          next.push({
+            id: uid(), name: normalize(item.name),
+            qty: qtyNum || 1, unit: item.unit || "pcs", floor: 0,
+            storage: "dry", store: item.store || "",
+          });
+        }
+      }
+      return next;
+    });
+
+    // Remove stocked items from the lists.
+    setShopItems(p => p.filter(i => !i.checked));
+    setFloorItems(p => p.filter(i => !i.checked));
+    setStockedMsg(`${checked.length} item${checked.length>1?"s":""} added to pantry`);
+    setTimeout(() => setStockedMsg(""), 3000);
   }
 
   const groupKey = groupBy === "store" ? "store" : "category";
@@ -1403,6 +1451,20 @@ function ShopTab({ plan, recipes, pantry }) {
           <Btn small onClick={doGenerate}>{generated ? "Refresh" : "Generate"}</Btn>
         </div>
       </div>
+
+      {stockedMsg && (
+        <div style={{ padding:"8px 12px", borderRadius:8, background:COLORS.boostBg, color:COLORS.boost, fontSize:12, fontWeight:600, marginBottom:10 }}>
+          ✓ {stockedMsg}
+        </div>
+      )}
+
+      {generated && totalChecked > 0 && (
+        <div style={{ marginBottom:10 }}>
+          <Btn small onClick={stockChecked} style={{ width:"100%" }}>
+            ✓ Add {totalChecked} checked item{totalChecked>1?"s":""} to pantry
+          </Btn>
+        </div>
+      )}
 
       {!generated ? (
         <Card style={{ marginTop:12, textAlign:"center", padding:24 }}>
@@ -1947,7 +2009,7 @@ export default function App() {
       <div style={{ flex:1, padding:"12px 16px 90px", overflowY:"auto" }}>
         {tab === "Recipes" && <RecipesTab recipes={recipes} setRecipes={setRecipes} settings={settings} dictionary={dictionary} setDictionary={setDictionary} />}
         {tab === "Plan" && <PlanTab recipes={recipes} setRecipes={setRecipes} plan={plan} setPlan={setPlan} settings={settings} pantry={pantry} setPantry={setPantry} people={people} />}
-        {tab === "Shop" && <ShopTab plan={plan} recipes={recipes} pantry={pantry} />}
+        {tab === "Shop" && <ShopTab plan={plan} recipes={recipes} pantry={pantry} setPantry={setPantry} />}
         {tab === "Pantry" && <PantryTab pantry={pantry} setPantry={setPantry} />}
         {tab === "Settings" && <SettingsTab settings={settings} setSettings={setSettings} people={people} setPeople={setPeople} />}
       </div>
