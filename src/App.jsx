@@ -687,7 +687,7 @@ function RecipesTab({ recipes, setRecipes, settings, dictionary, setDictionary }
   const [filter, setFilter] = useState("all");
   const [expandedId, setExpandedId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
-  const [addForm, setAddForm] = useState({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, ingredientText:"" });
+  const [addForm, setAddForm] = useState({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"" });
 
   const allTags = useMemo(() => [...new Set([...DEFAULT_TAGS, ...recipes.flatMap(r => r.tags || [])])].sort(), [recipes]);
 
@@ -713,8 +713,11 @@ function RecipesTab({ recipes, setRecipes, settings, dictionary, setDictionary }
   }));
 
   function saveRecipe() {
-    const ings = addForm.ingredientText.split("\n").map(parseIngredientLine).filter(Boolean);
-    const newIngs = ings.map(ing => ({ ...ing, name: findMatch(ing.name, dictionary) }));
+    const parseTier = (text, tier) => text.split("\n").map(parseIngredientLine).filter(Boolean)
+      .map(ing => ({ ...ing, name: findMatch(ing.name, dictionary), tier }));
+    const essentialIngs = parseTier(addForm.essentialText, "essential");
+    const secondaryIngs = parseTier(addForm.secondaryText, "secondary");
+    const newIngs = [...essentialIngs, ...secondaryIngs];
     const newDict = [...new Set([...dictionary, ...newIngs.map(i => i.name)])];
     setDictionary(newDict);
 
@@ -731,7 +734,7 @@ function RecipesTab({ recipes, setRecipes, settings, dictionary, setDictionary }
       lastUsed: null, useCount: 0, useHistory: [], shelvedUntil: null, createdAt: Date.now(),
     };
     setRecipes(prev => [...prev, recipe]);
-    setAddForm({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, ingredientText:"" });
+    setAddForm({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"" });
     setShowAdd(false);
   }
 
@@ -802,17 +805,29 @@ function RecipesTab({ recipes, setRecipes, settings, dictionary, setDictionary }
                     <input type="number" value={r.servings} onChange={e => updateRecipe(r.id, { servings: Math.max(1, +e.target.value) })} style={{ width:50, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center", marginTop:2 }} />
                   </div>
                 </div>
-                <div style={{ fontSize:12, fontWeight:600, color:COLORS.textSec, marginBottom:4 }}>Ingredients ({r.ingredients.length})</div>
-                <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
-                  {r.ingredients.map((ing, idx) => {
+                {(() => {
+                  const renderIng = (ing, idx) => {
                     const isRed = settings.redList.some(rl => normalize(rl) === normalize(ing.name));
                     return (
                       <span key={idx} style={{ fontSize:12, padding:"3px 8px", borderRadius:4, background:isRed?COLORS.quarantineBg:"#fff", border:`1px solid ${isRed?COLORS.quarantine:COLORS.border}`, color:isRed?COLORS.quarantine:COLORS.text, fontWeight:isRed?600:400 }}>
                         {isRed && "⚠ "}{ing.qty > 0 && ing.qty !== 1 ? ing.qty + " " : ""}{ing.unit ? ing.unit + " " : ""}{ing.name}
                       </span>
                     );
-                  })}
-                </div>
+                  };
+                  // Legacy recipes have no tier — treat those as essential.
+                  const essential = r.ingredients.filter(i => (i.tier || "essential") === "essential");
+                  const secondary = r.ingredients.filter(i => i.tier === "secondary");
+                  return (
+                    <>
+                      <div style={{ fontSize:11, fontWeight:700, color:COLORS.primary, marginBottom:4 }}>Essential ({essential.length})</div>
+                      <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>{essential.map(renderIng)}</div>
+                      {secondary.length > 0 && <>
+                        <div style={{ fontSize:11, fontWeight:700, color:COLORS.textSec, marginBottom:4, marginTop:8 }}>Secondary ({secondary.length})</div>
+                        <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>{secondary.map(renderIng)}</div>
+                      </>}
+                    </>
+                  );
+                })()}
                 {r.quarantine && r.quarantineItems?.length > 0 && (
                   <div style={{ marginTop:8 }}>
                     <div style={{ fontSize:12, fontWeight:600, color:COLORS.quarantine, marginBottom:4 }}>Substitutions needed</div>
@@ -868,9 +883,18 @@ function RecipesTab({ recipes, setRecipes, settings, dictionary, setDictionary }
                 <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Rating</div>
                 <StarRating rating={addForm.stars} size={22} onChange={v => setAddForm(p => ({ ...p, stars: v }))} />
               </div>
-              <textarea placeholder={"Paste ingredients, one per line:\n2 cups rice\n1.5 kg chicken thigh\n3 cloves garlic\nsalt"} value={addForm.ingredientText} onChange={e => setAddForm(p => ({ ...p, ingredientText: e.target.value }))} rows={5} style={{ padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, resize:"vertical", fontFamily:"inherit" }} />
+              <div>
+                <div style={{ fontSize:11, color:COLORS.text, marginBottom:2, fontWeight:700 }}>Essential ingredients</div>
+                <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>The ones that define the dish. If someone can't have one of these, the recipe won't work for them.</div>
+                <textarea placeholder={"2 cups rice\n1.5 kg chicken thigh"} value={addForm.essentialText} onChange={e => setAddForm(p => ({ ...p, essentialText: e.target.value }))} rows={4} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.primary}80`, fontSize:13, resize:"vertical", fontFamily:"inherit" }} />
+              </div>
+              <div>
+                <div style={{ fontSize:11, color:COLORS.text, marginBottom:2, fontWeight:700 }}>Secondary ingredients <span style={{ color:COLORS.textSec, fontWeight:400 }}>(optional)</span></div>
+                <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>Accessories that can be left out. If someone can't have one, it's just omitted and the recipe still works.</div>
+                <textarea placeholder={"3 cloves garlic\n1 onion\ncilantro"} value={addForm.secondaryText} onChange={e => setAddForm(p => ({ ...p, secondaryText: e.target.value }))} rows={3} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, resize:"vertical", fontFamily:"inherit" }} />
+              </div>
               <div style={{ display:"flex", gap:8 }}>
-                <Btn style={{ flex:1 }} onClick={saveRecipe} disabled={!addForm.name.trim() || !addForm.ingredientText.trim()}>Save Recipe</Btn>
+                <Btn style={{ flex:1 }} onClick={saveRecipe} disabled={!addForm.name.trim() || !addForm.essentialText.trim()}>Save Recipe</Btn>
                 <Btn variant="ghost" onClick={() => setShowAdd(false)}>Cancel</Btn>
               </div>
             </div>
