@@ -850,7 +850,7 @@ function SubstitutionRow({ qi, onResolve }) {
 // ============================================================
 // PLAN TAB
 // ============================================================
-function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPantry, people }) {
+function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPantry, people, spices, setSpices }) {
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [pickerSlot, setPickerSlot] = useState(null);
   const [pickerSearch, setPickerSearch] = useState("");
@@ -1336,10 +1336,24 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
             {cookModal.spices.length > 0 && <>
               <SectionLabel>Spices used — tap to flag low</SectionLabel>
               <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-                {cookModal.spices.map((s, i) => (
-                  <SpiceFlagChip key={i} name={s} />
-                ))}
+                {cookModal.spices.map((s, i) => {
+                  const onShelf = spices.find(x => normalize(x.name) === normalize(s));
+                  const isLow = onShelf?.low;
+                  return (
+                    <span key={i} onClick={() => {
+                      setSpices(prev => {
+                        const existing = prev.find(x => normalize(x.name) === normalize(s));
+                        if (existing) return prev.map(x => x.id === existing.id ? { ...x, low: !x.low } : x);
+                        // Not on shelf yet — add it, flagged low.
+                        return [...prev, { id: uid(), name: normalize(s), low: true }];
+                      });
+                    }} style={{ fontSize:12, padding:"4px 8px", borderRadius:5, cursor:"pointer", background:isLow?COLORS.quarantineBg:COLORS.surface, border:`1px solid ${isLow?COLORS.red:COLORS.border}`, color:isLow?COLORS.red:COLORS.text, fontWeight:isLow?600:400 }}>
+                      {isLow ? "🔻 " : ""}{s}{!onShelf ? " +" : ""}
+                    </span>
+                  );
+                })}
               </div>
+              <div style={{ fontSize:10, color:COLORS.textSec, marginTop:4 }}>Flagged spices appear on your shopping list. "+" adds a new spice to your shelf.</div>
             </>}
 
             <div style={{ display:"flex", gap:8, marginTop:18 }}>
@@ -1355,19 +1369,11 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
 
 // Spice chip in the cook modal — taps toggle a "flag low" visual hint.
 // (Wiring spice flags into the shopping list comes with the spice shelf, D.)
-function SpiceFlagChip({ name }) {
-  const [flagged, setFlagged] = useState(false);
-  return (
-    <span onClick={() => setFlagged(f => !f)} style={{ fontSize:12, padding:"4px 8px", borderRadius:5, cursor:"pointer", background:flagged?COLORS.quarantineBg:COLORS.surface, border:`1px solid ${flagged?COLORS.red:COLORS.border}`, color:flagged?COLORS.red:COLORS.text, fontWeight:flagged?600:400 }}>
-      {flagged ? "🔻 " : ""}{name}
-    </span>
-  );
-}
 
 // ============================================================
 // SHOP TAB
 // ============================================================
-function ShopTab({ plan, recipes, pantry, setPantry }) {
+function ShopTab({ plan, recipes, pantry, setPantry, spices, setSpices }) {
   const [shopItems, setShopItems] = useState([]);
   const [floorItems, setFloorItems] = useState([]);
   const [groupBy, setGroupBy] = useState("category");
@@ -1517,6 +1523,19 @@ function ShopTab({ plan, recipes, pantry, setPantry }) {
             </div>
           </>}
 
+          {spices.filter(s => s.low).length > 0 && <>
+            <SectionLabel>Spices Running Low</SectionLabel>
+            <div style={{ background:COLORS.surface, borderRadius:8, padding:"4px 0" }}>
+              {spices.filter(s => s.low).map(s => (
+                <div key={s.id} onClick={() => setSpices(prev => prev.map(x => x.id === s.id ? { ...x, low: false } : x))} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", cursor:"pointer" }}>
+                  <div style={{ width:20, height:20, borderRadius:4, border:`2px solid ${COLORS.red}`, background:"transparent", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }} />
+                  <span style={{ flex:1, fontSize:14 }}>🧂 {s.name}</span>
+                  <span style={{ fontSize:10, color:COLORS.textSec }}>tap when restocked</span>
+                </div>
+              ))}
+            </div>
+          </>}
+
           <SectionLabel>Add manually</SectionLabel>
           <div style={{ display:"flex", gap:6 }}>
             <input placeholder="Item name..." value={manualName} onChange={e => setManualName(e.target.value)} style={{ flex:1, padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
@@ -1532,11 +1551,13 @@ function ShopTab({ plan, recipes, pantry, setPantry }) {
 // ============================================================
 // PANTRY TAB
 // ============================================================
-function PantryTab({ pantry, setPantry }) {
+function PantryTab({ pantry, setPantry, spices, setSpices }) {
   const [storageFilter, setStorageFilter] = useState("all");
   const [editId, setEditId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({ name:"", qty:1, unit:"pcs", floor:0, storage:"dry", store:"" });
+  const [spicesOpen, setSpicesOpen] = useState(false);
+  const [newSpice, setNewSpice] = useState("");
 
   const allStores = useMemo(() => [...new Set([...DEFAULT_STORES, ...pantry.map(p => p.store).filter(Boolean)])].sort(), [pantry]);
 
@@ -1659,6 +1680,42 @@ function PantryTab({ pantry, setPantry }) {
             </div>
           );
         })}
+      </div>
+
+      {/* Spice shelf — binary stocked/low, collapsed by default */}
+      <div style={{ marginTop:18 }}>
+        <div onClick={() => setSpicesOpen(o => !o)} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", borderRadius:8, background:COLORS.surface, border:`1px solid ${COLORS.border}`, cursor:"pointer" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ fontSize:14 }}>🧂</span>
+            <span style={{ fontSize:14, fontWeight:700 }}>Spice Shelf</span>
+            <span style={{ fontSize:11, color:COLORS.textSec }}>({spices.length})</span>
+            {spices.filter(s => s.low).length > 0 && (
+              <Badge color={COLORS.red} bg={COLORS.quarantineBg}>{spices.filter(s => s.low).length} low</Badge>
+            )}
+          </div>
+          <span style={{ fontSize:12, color:COLORS.textSec }}>{spicesOpen ? "▲" : "▼"}</span>
+        </div>
+
+        {spicesOpen && (
+          <div style={{ marginTop:8 }}>
+            <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:8 }}>
+              No quantities — just tap a spice when it's running low to add it to the shopping list.
+            </div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}>
+              {spices.map(s => (
+                <span key={s.id} onClick={() => setSpices(prev => prev.map(x => x.id === s.id ? { ...x, low: !x.low } : x))} style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:13, padding:"6px 10px", borderRadius:6, cursor:"pointer", background:s.low?COLORS.quarantineBg:"#fff", border:`1.5px solid ${s.low?COLORS.red:COLORS.border}`, color:s.low?COLORS.red:COLORS.text, fontWeight:s.low?600:400 }}>
+                  {s.low && "🔻"} {s.name}
+                  <span onClick={e => { e.stopPropagation(); setSpices(prev => prev.filter(x => x.id !== s.id)); }} style={{ fontSize:14, color:COLORS.textSec, marginLeft:2 }}>×</span>
+                </span>
+              ))}
+              {spices.length === 0 && <span style={{ fontSize:12, color:COLORS.textSec }}>No spices yet — add some below.</span>}
+            </div>
+            <div style={{ display:"flex", gap:6 }}>
+              <input value={newSpice} onChange={e => setNewSpice(e.target.value)} placeholder="Add spice (cumin, paprika…)" onKeyDown={e => { if (e.key === "Enter" && newSpice.trim()) { setSpices(prev => [...prev, { id: uid(), name: normalize(newSpice), low: false }]); setNewSpice(""); } }} style={{ flex:1, padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
+              <Btn small onClick={() => { if (newSpice.trim()) { setSpices(prev => [...prev, { id: uid(), name: normalize(newSpice), low: false }]); setNewSpice(""); } }}>Add</Btn>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1978,6 +2035,7 @@ export default function App() {
   const [settings, setSettingsRaw] = useState(() => load("settings", DEFAULT_SETTINGS));
   const [dictionary, setDictionaryRaw] = useState(() => load("dictionary", []));
   const [people, setPeopleRaw] = useState(() => load("people", []));
+  const [spices, setSpicesRaw] = useState(() => load("spices", []));
 
   // Persist INSIDE the functional updater so React supplies the true latest
   // state (no stale closure), and we save exactly what we commit. Empty dep
@@ -2000,6 +2058,9 @@ export default function App() {
   const setPeople = useCallback(v => {
     setPeopleRaw(prev => { const next = typeof v === "function" ? v(prev) : v; save("people", next); return next; });
   }, []);
+  const setSpices = useCallback(v => {
+    setSpicesRaw(prev => { const next = typeof v === "function" ? v(prev) : v; save("spices", next); return next; });
+  }, []);
 
   return (
     <div style={{ minHeight:"100vh", background:COLORS.bg, fontFamily:'-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', color:COLORS.text, display:"flex", flexDirection:"column" }}>
@@ -2008,9 +2069,9 @@ export default function App() {
       </div>
       <div style={{ flex:1, padding:"12px 16px 90px", overflowY:"auto" }}>
         {tab === "Recipes" && <RecipesTab recipes={recipes} setRecipes={setRecipes} settings={settings} dictionary={dictionary} setDictionary={setDictionary} />}
-        {tab === "Plan" && <PlanTab recipes={recipes} setRecipes={setRecipes} plan={plan} setPlan={setPlan} settings={settings} pantry={pantry} setPantry={setPantry} people={people} />}
-        {tab === "Shop" && <ShopTab plan={plan} recipes={recipes} pantry={pantry} setPantry={setPantry} />}
-        {tab === "Pantry" && <PantryTab pantry={pantry} setPantry={setPantry} />}
+        {tab === "Plan" && <PlanTab recipes={recipes} setRecipes={setRecipes} plan={plan} setPlan={setPlan} settings={settings} pantry={pantry} setPantry={setPantry} people={people} spices={spices} setSpices={setSpices} />}
+        {tab === "Shop" && <ShopTab plan={plan} recipes={recipes} pantry={pantry} setPantry={setPantry} spices={spices} setSpices={setSpices} />}
+        {tab === "Pantry" && <PantryTab pantry={pantry} setPantry={setPantry} spices={spices} setSpices={setSpices} />}
         {tab === "Settings" && <SettingsTab settings={settings} setSettings={setSettings} people={people} setPeople={setPeople} />}
       </div>
       <div style={{ position:"fixed", bottom:0, left:0, right:0, display:"flex", justifyContent:"space-around", padding:"8px 0 max(12px, env(safe-area-inset-bottom))", background:COLORS.bg, borderTop:`1px solid ${COLORS.border}`, zIndex:20 }}>
