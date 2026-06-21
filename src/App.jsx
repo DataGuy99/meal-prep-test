@@ -62,9 +62,24 @@ function uid() { return Date.now().toString(36) + Math.random().toString(36).sli
 // ============================================================
 // INGREDIENT NORMALIZATION
 // ============================================================
+// Singular words ending in 's' that must never be reduced.
+const NORM_KEEP = new Set([
+  "hummus","asparagus","couscous","molasses","watercress","swiss","bass",
+  "citrus","status","focus","octopus","cactus","analysis","basis","series",
+  "species","kiwi","chili","gas",
+]);
+
 function normalize(s) {
-  return s.toLowerCase().trim().replace(/-/g, " ").replace(/\s+/g, " ")
-    .replace(/ies$/, "y").replace(/ves$/, "f").replace(/([^s])s$/, "$1");
+  let w = s.toLowerCase().trim().replace(/-/g, " ").replace(/\s+/g, " ");
+  if (!w) return w;
+  if (NORM_KEEP.has(w)) return w;
+  if (/[^aeiou]ies$/.test(w)) return w.replace(/ies$/, "y");   // berries -> berry
+  if (/ves$/.test(w)) return w.replace(/s$/, "");              // olives -> olive, cloves -> clove
+  if (/oes$/.test(w)) return w.replace(/es$/, "");             // tomatoes -> tomato
+  if (/ss$/.test(w)) return w;                                  // glass, watercress (singular)
+  if (/(us|is)$/.test(w)) return w;                            // citrus, basis (singular)
+  if (/s$/.test(w)) return w.replace(/s$/, "");               // generic plural: eggs -> egg
+  return w;
 }
 
 function levenshtein(a, b) {
