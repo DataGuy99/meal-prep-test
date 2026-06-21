@@ -625,6 +625,8 @@ function SubstitutionRow({ qi, onResolve }) {
 // ============================================================
 function PlanTab({ recipes, setRecipes, plan, setPlan, settings }) {
   const [selectedSlot, setSelectedSlot] = useState(null);
+  const [pickerSlot, setPickerSlot] = useState(null);
+  const [pickerSearch, setPickerSearch] = useState("");
 
   function doGenerate() {
     const newPlan = generatePlan(recipes, plan, settings);
@@ -660,6 +662,19 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings }) {
       return next;
     });
     setSelectedSlot(null);
+  }
+
+  function assignRecipe(day, meal, recipe) {
+    setPlan(prev => {
+      const next = JSON.parse(JSON.stringify(prev));
+      if (!next[day]) next[day] = {};
+      next[day][meal] = {
+        recipeId: recipe.id, recipeName: recipe.name, chunk: "1/1", locked: false,
+      };
+      return next;
+    });
+    setPickerSlot(null);
+    setPickerSearch("");
   }
 
   function autofillBlanks() {
@@ -731,14 +746,14 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings }) {
                   return (
                     <td key={m} style={{ padding:2, verticalAlign:"top" }}>
                       {slot ? (
-                        <div onClick={() => setSelectedSlot({ day:d, meal:m })} style={{ background:MC[m].bg, border:`1.5px solid ${isSel?MC[m].fg:`${MC[m].fg}40`}`, borderRadius:6, padding:"4px 6px", minHeight:36, position:"relative", cursor:"pointer" }}>
+                        <div onClick={() => { setSelectedSlot({ day:d, meal:m }); setPickerSlot(null); }} style={{ background:MC[m].bg, border:`1.5px solid ${isSel?MC[m].fg:`${MC[m].fg}40`}`, borderRadius:6, padding:"4px 6px", minHeight:36, position:"relative", cursor:"pointer" }}>
                           {slot.locked && <span style={{ position:"absolute", top:2, right:3, fontSize:9, color:COLORS.lock }}>🔒</span>}
                           <div style={{ fontSize:11, fontWeight:600, color:MC[m].fg, lineHeight:1.2, paddingRight:slot.locked?14:0 }}>{slot.recipeName}</div>
                           <div style={{ fontSize:9, color:COLORS.textSec, marginTop:1 }}>{slot.chunk}</div>
                         </div>
                       ) : (
-                        <div onClick={() => setSelectedSlot({ day:d, meal:m })} style={{ border:`1.5px dashed ${isSel?MC[m].fg:COLORS.border}`, borderRadius:6, padding:"5px 6px", minHeight:36, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer" }}>
-                          <span style={{ fontSize:14, color:isSel?MC[m].fg:COLORS.border }}>+</span>
+                        <div onClick={() => { setPickerSlot({ day:d, meal:m }); setSelectedSlot(null); setPickerSearch(""); }} style={{ border:`1.5px dashed ${(pickerSlot?.day===d && pickerSlot?.meal===m)?MC[m].fg:COLORS.border}`, borderRadius:6, padding:"5px 6px", minHeight:36, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer" }}>
+                          <span style={{ fontSize:14, color:(pickerSlot?.day===d && pickerSlot?.meal===m)?MC[m].fg:COLORS.border }}>+</span>
                         </div>
                       )}
                     </td>
@@ -749,6 +764,69 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings }) {
           </tbody>
         </table>
       </div>
+
+      {pickerSlot && !plan?.[pickerSlot.day]?.[pickerSlot.meal] && (() => {
+        const mealKey = pickerSlot.meal.toLowerCase();
+        const mealColor = MC[pickerSlot.meal];
+        const now = Date.now();
+        const eligible = recipes.filter(r => {
+          if (r.quarantine) return false;
+          if (!(r.mealTags || []).includes(mealKey)) return false;
+          for (const ex of settings.excludes) {
+            if (ex.expiresAt > now) {
+              for (const ing of r.ingredients) {
+                if (normalize(ing.name) === normalize(ex.ingredient)) return false;
+              }
+            }
+          }
+          if (pickerSearch) {
+            const q = pickerSearch.toLowerCase();
+            if (!r.name.toLowerCase().includes(q) && !(r.tags||[]).some(t => t.includes(q))) return false;
+          }
+          return true;
+        }).sort((a, b) => (b.stars || 0) - (a.stars || 0));
+
+        return (
+          <Card style={{ marginTop:10, border:`2px solid ${mealColor.fg}`, maxHeight:320, display:"flex", flexDirection:"column" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+              <span style={{ fontSize:13, fontWeight:700, color:mealColor.fg }}>{pickerSlot.day} {pickerSlot.meal}</span>
+              <span style={{ fontSize:11, color:COLORS.textSec, cursor:"pointer" }} onClick={() => setPickerSlot(null)}>✕</span>
+            </div>
+            <input
+              value={pickerSearch} onChange={e => setPickerSearch(e.target.value)}
+              placeholder="Search recipes..." autoFocus
+              style={{ padding:"7px 10px", borderRadius:6, border:`1.5px solid ${mealColor.fg}40`, fontSize:13, marginBottom:8, outline:"none" }}
+            />
+            <div style={{ flex:1, overflowY:"auto", display:"flex", flexDirection:"column", gap:4 }}>
+              {eligible.length === 0 && (
+                <div style={{ padding:16, textAlign:"center", fontSize:13, color:COLORS.textSec }}>
+                  No {mealKey}-tagged recipes{pickerSearch ? " matching search" : ""}
+                </div>
+              )}
+              {eligible.map(r => (
+                <div key={r.id} onClick={() => assignRecipe(pickerSlot.day, pickerSlot.meal, r)} style={{
+                  display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderRadius:6,
+                  background:mealColor.bg, border:`1px solid ${mealColor.fg}25`, cursor:"pointer",
+                }}>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:600, color:mealColor.fg }}>{r.name}</div>
+                    <div style={{ display:"flex", gap:4, marginTop:2, flexWrap:"wrap" }}>
+                      {(r.tags||[]).map(t => <Badge key={t} color={COLORS.primary} bg={`${COLORS.primary}15`} style={{ fontSize:9, padding:"1px 5px" }}>{t}</Badge>)}
+                      <span style={{ fontSize:10, color:COLORS.textSec }}>{r.servings} srv · {r.slotsMin}–{r.slotsMax} slots</span>
+                    </div>
+                  </div>
+                  <div style={{ flexShrink:0, display:"flex", flexDirection:"column", alignItems:"flex-end", gap:2 }}>
+                    <StarRating rating={r.stars} size={11} />
+                    <div style={{ width:30, height:3, borderRadius:2, background:COLORS.border }}>
+                      <div style={{ width:`${calcFatigueRecency(r)*100}%`, height:3, borderRadius:2, background:calcFatigueRecency(r)>0.5?COLORS.primary:COLORS.red }} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        );
+      })()}
 
       {selectedSlot && plan?.[selectedSlot.day]?.[selectedSlot.meal] && (
         <Card style={{ marginTop:10, border:`2px solid ${MC[selectedSlot.meal].fg}` }}>
