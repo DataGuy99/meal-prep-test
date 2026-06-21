@@ -331,7 +331,6 @@ function generatePlan(recipes, existingPlan, settings) {
         plan[remaining[i]][meal] = {
           recipeId: picked.id,
           recipeName: picked.name,
-          chunk: `${i + 1}/${chunkSize}`,
           locked: false,
         };
       }
@@ -372,7 +371,7 @@ function rerollSlot(day, meal, recipes, plan, settings) {
 
   const newPlan = JSON.parse(JSON.stringify(plan));
   newPlan[day][meal] = {
-    recipeId: picked.id, recipeName: picked.name, chunk: "1/1", locked: false,
+    recipeId: picked.id, recipeName: picked.name, locked: false,
   };
   return newPlan;
 }
@@ -849,7 +848,7 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings }) {
       const next = JSON.parse(JSON.stringify(prev));
       if (!next[day]) next[day] = {};
       next[day][meal] = {
-        recipeId: recipe.id, recipeName: recipe.name, chunk: "1/1", locked: true,
+        recipeId: recipe.id, recipeName: recipe.name, locked: true,
       };
       return next;
     });
@@ -900,6 +899,25 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings }) {
   }));
   const chunkList = Object.values(chunks);
 
+  // Live slot fractions: for each recipe, number its occurrences in week
+  // reading order (Mon→Sun, Breakfast→Dinner) as "i/total". Derived from the
+  // actual plan every render, so manual/generated/rerolled all read honestly
+  // and nothing stale is stored on the slot.
+  const slotFraction = {}; // key: `${day}|${meal}` -> "i/total"
+  const recipeTotals = {};
+  DAYS.forEach(d => MEALS.forEach(m => {
+    const s = plan?.[d]?.[m];
+    if (s?.recipeId) recipeTotals[s.recipeId] = (recipeTotals[s.recipeId] || 0) + 1;
+  }));
+  const recipeSeen = {};
+  DAYS.forEach(d => MEALS.forEach(m => {
+    const s = plan?.[d]?.[m];
+    if (s?.recipeId) {
+      recipeSeen[s.recipeId] = (recipeSeen[s.recipeId] || 0) + 1;
+      slotFraction[`${d}|${m}`] = `${recipeSeen[s.recipeId]}/${recipeTotals[s.recipeId]}`;
+    }
+  }));
+
   // Range compliance
   const tagCounts = {};
   DAYS.forEach(d => MEALS.forEach(m => {
@@ -948,7 +966,7 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings }) {
                           ) : (
                             <>
                               <div style={{ fontSize:11, fontWeight:600, color:MC[m].fg, lineHeight:1.2, paddingRight:slot.locked?14:0 }}>{slot.recipeName}</div>
-                              <div style={{ fontSize:9, color:COLORS.textSec, marginTop:1 }}>{slot.chunk}</div>
+                              <div style={{ fontSize:9, color:COLORS.textSec, marginTop:1 }}>{slotFraction[`${d}|${m}`]}</div>
                             </>
                           )}
                         </div>
