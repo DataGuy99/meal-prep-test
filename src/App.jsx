@@ -539,6 +539,52 @@ function getFloorItems(pantry) {
   })).filter(i => i.qty > 0);
 }
 
+// Unified shopping list: merge plan-demand and floor-replenishment into one
+// deduplicated list keyed by (normalized name + unit family). When both
+// sources want the same ingredient, take the MAX of the two needs, not the
+// sum — buying enough for the larger need covers the smaller. This is what
+// prevents the floor double-add (an item that's both plan-needed and below
+// floor appears once). Manual items are passed through untouched.
+function buildUnifiedList(plan, recipes, pantry) {
+  // Collect plan needs in base units per (name, family).
+  const planItems = generateShoppingList(plan, recipes, pantry);
+  const floorItems = getFloorItems(pantry);
+
+  // Key each by name|family. For floor items, derive their family from unit.
+  const merged = {}; // key -> item with baseQty for comparison
+  const keyOf = (name, unit) => `${normalize(name)}|${unitInfo(unit).family}`;
+
+  function consider(item, reason) {
+    const k = keyOf(item.name, item.unit);
+    const info = unitInfo(item.unit);
+    const base = (parseFloat(item.qty) || 0) * info.factor;
+    if (!merged[k]) {
+      merged[k] = { ...item, _base: base, _family: info.family, sources: [item.source] };
+      if (reason) merged[k].reason = reason;
+    } else {
+      const m = merged[k];
+      if (!m.sources.includes(item.source)) m.sources.push(item.source);
+      // Take the larger need (max), re-deriving display from the winning base.
+      if (base > m._base) {
+        m._base = base;
+        const disp = prettyUnit(info.family, base);
+        m.qty = round1(disp.qty);
+        m.unit = disp.unit;
+      }
+      // Prefer a store hint if we don't have one.
+      if (!m.store && item.store) m.store = item.store;
+      // Keep a floor reason if present (explains why it's here beyond the plan).
+      if (reason && !m.reason) m.reason = reason;
+    }
+  }
+
+  planItems.forEach(it => consider(it, null));
+  floorItems.forEach(it => consider(it, it.reason));
+
+  // Strip internal fields.
+  return Object.values(merged).map(({ _base, _family, ...rest }) => rest);
+}
+
 // ============================================================
 // SHARED UI COMPONENTS
 // ============================================================
@@ -1375,7 +1421,6 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
 // ============================================================
 function ShopTab({ plan, recipes, pantry, setPantry, spices, setSpices }) {
   const [shopItems, setShopItems] = useState([]);
-  const [floorItems, setFloorItems] = useState([]);
   const [groupBy, setGroupBy] = useState("category");
   const [manualName, setManualName] = useState("");
   const [manualQty, setManualQty] = useState("");
@@ -1383,15 +1428,39 @@ function ShopTab({ plan, recipes, pantry, setPantry, spices, setSpices }) {
   const [stockedMsg, setStockedMsg] = useState("");
 
   function doGenerate() {
-    setShopItems(generateShoppingList(plan, recipes, pantry).map((x, i) => ({ ...x, id: "s" + i })));
-    setFloorItems(getFloorItems(pantry).map((x, i) => ({ ...x, id: "f" + i })));
+    // Preserve any manual items the user added, re-merge with fresh plan+floor.
+    const manual = shopItems.filter(i => i.source === "manual");
+    const unified = buildUnifiedList(plan, recipes, pantry);
+    // Merge manual items in, deduped by name+family against the unified list.
+    const byKey = {};
+    const keyOf = (name, unit) => `${normalize(name)}|${unitInfo(unit).family}`;
+    [...unified, ...manual].forEach(it => {
+      const k = keyOf(it.name, it.unit);
+      if (!byKey[k]) byKey[k] = { ...it };
+      else {
+        // keep existing; note manual source if applicable
+        if (it.source === "manual" && byKey[k].source !== "manual") {
+          byKey[k].sources = [...(byKey[k].sources || [byKey[k].source]), "manual"];
+        }
+      }
+    });
+    setShopItems(Object.values(byKey).map((x, i) => ({ ...x, id: x.id || ("s" + i), checked: x.checked || false })));
     setGenerated(true);
   }
 
   function toggle(id) { setShopItems(p => p.map(x => x.id === id ? { ...x, checked: !x.checked } : x)); }
-  function toggleFloor(id) { setFloorItems(p => p.map(x => x.id === id ? { ...x, checked: !x.checked } : x)); }
   function addManual() {
     if (!manualName.trim()) return;
+    // Dedup: if this ingredient is already on the list (same name+family), don't double-add.
+    const keyOf = (name, unit) => `${normalize(name)}|${unitInfo(unit).family}`;
+    const newKey = keyOf(manualName, "");
+    const exists = shopItems.find(i => keyOf(i.name, i.unit) === newKey);
+    if (exists) {
+      setManualName(""); setManualQty("");
+      setStockedMsg(`${normalize(manualName)} is already on your list`);
+      setTimeout(() => setStockedMsg(""), 2500);
+      return;
+    }
     setShopItems(p => [...p, { id: "m" + uid(), name: manualName.trim(), qty: manualQty || "1", unit: "", category: guessCategory(manualName), store: "", checked: false, source: "manual" }]);
     setManualName(""); setManualQty("");
   }
@@ -1401,10 +1470,7 @@ function ShopTab({ plan, recipes, pantry, setPantry, spices, setSpices }) {
   // families match; otherwise leave the pantry qty and just note it). New
   // items are created. Checked items are then removed from the list.
   function stockChecked() {
-    const checked = [
-      ...shopItems.filter(i => i.checked),
-      ...floorItems.filter(i => i.checked),
-    ];
+    const checked = shopItems.filter(i => i.checked);
     if (checked.length === 0) return;
 
     setPantry(prev => {
@@ -1436,17 +1502,16 @@ function ShopTab({ plan, recipes, pantry, setPantry, spices, setSpices }) {
       return next;
     });
 
-    // Remove stocked items from the lists.
+    // Remove stocked items from the list.
     setShopItems(p => p.filter(i => !i.checked));
-    setFloorItems(p => p.filter(i => !i.checked));
     setStockedMsg(`${checked.length} item${checked.length>1?"s":""} added to pantry`);
     setTimeout(() => setStockedMsg(""), 3000);
   }
 
   const groupKey = groupBy === "store" ? "store" : "category";
   const groups = [...new Set(shopItems.map(i => i[groupKey] || "Other"))].sort();
-  const totalChecked = shopItems.filter(i => i.checked).length + floorItems.filter(i => i.checked).length;
-  const totalItems = shopItems.length + floorItems.length;
+  const totalChecked = shopItems.filter(i => i.checked).length;
+  const totalItems = shopItems.length;
 
   return (
     <div>
@@ -1485,42 +1550,31 @@ function ShopTab({ plan, recipes, pantry, setPantry, spices, setSpices }) {
           </div>
 
           {shopItems.length > 0 && <>
-            <SectionLabel>From Meal Plan</SectionLabel>
+            <SectionLabel>Shopping List</SectionLabel>
             {groups.map(g => (
               <div key={g} style={{ marginBottom:10 }}>
                 <div style={{ fontSize:11, fontWeight:700, color:COLORS.primary, marginBottom:4, textTransform:"uppercase", letterSpacing:0.8 }}>{g || "Other"}</div>
-                {shopItems.filter(i => (i[groupKey]||"Other") === g).map(item => (
-                  <div key={item.id} onClick={() => toggle(item.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderRadius:6, background:item.checked?`${COLORS.primary}08`:"transparent", cursor:"pointer", marginBottom:2 }}>
-                    <div style={{ width:20, height:20, borderRadius:4, border:`2px solid ${item.checked?COLORS.primary:COLORS.border}`, background:item.checked?COLORS.primary:"transparent", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                      {item.checked && <span style={{ color:"#fff", fontSize:12, fontWeight:700 }}>✓</span>}
+                {shopItems.filter(i => (i[groupKey]||"Other") === g).map(item => {
+                  const srcs = item.sources || [item.source];
+                  const isFloor = srcs.includes("floor");
+                  return (
+                    <div key={item.id} onClick={() => toggle(item.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderRadius:6, background:item.checked?`${COLORS.primary}08`:"transparent", cursor:"pointer", marginBottom:2 }}>
+                      <div style={{ width:20, height:20, borderRadius:4, border:`2px solid ${item.checked?COLORS.primary:(isFloor?COLORS.red:COLORS.border)}`, background:item.checked?COLORS.primary:"transparent", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                        {item.checked && <span style={{ color:"#fff", fontSize:12, fontWeight:700 }}>✓</span>}
+                      </div>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <span style={{ fontSize:14, color:item.checked?COLORS.textSec:COLORS.text, textDecoration:item.checked?"line-through":"none" }}>{item.name}</span>
+                        {item.reason && <div style={{ fontSize:9, color:COLORS.red }}>{item.reason}</div>}
+                      </div>
+                      <div style={{ textAlign:"right", flexShrink:0 }}>
+                        <div style={{ fontSize:12, color:COLORS.textSec }}>{item.qty}{item.unit ? " " + item.unit : ""}</div>
+                        {groupBy==="category" && item.store && <div style={{ fontSize:9, color:COLORS.textSec }}>{item.store}</div>}
+                      </div>
                     </div>
-                    <span style={{ flex:1, fontSize:14, color:item.checked?COLORS.textSec:COLORS.text, textDecoration:item.checked?"line-through":"none" }}>{item.name}</span>
-                    <div style={{ textAlign:"right" }}>
-                      <div style={{ fontSize:12, color:COLORS.textSec }}>{item.qty}{item.unit ? " " + item.unit : ""}</div>
-                      {groupBy==="category" && item.store && <div style={{ fontSize:9, color:COLORS.textSec }}>{item.store}</div>}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ))}
-          </>}
-
-          {floorItems.length > 0 && <>
-            <SectionLabel>Staple Replenishment</SectionLabel>
-            <div style={{ background:COLORS.surface, borderRadius:8, padding:"4px 0" }}>
-              {floorItems.map(item => (
-                <div key={item.id} onClick={() => toggleFloor(item.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", cursor:"pointer" }}>
-                  <div style={{ width:20, height:20, borderRadius:4, border:`2px solid ${item.checked?COLORS.primary:COLORS.red}`, background:item.checked?COLORS.primary:"transparent", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                    {item.checked && <span style={{ color:"#fff", fontSize:12, fontWeight:700 }}>✓</span>}
-                  </div>
-                  <span style={{ flex:1, fontSize:14, color:item.checked?COLORS.textSec:COLORS.text, textDecoration:item.checked?"line-through":"none" }}>{item.name}</span>
-                  <div style={{ textAlign:"right" }}>
-                    <div style={{ fontSize:12, color:COLORS.textSec }}>{item.qty}{item.unit ? " " + item.unit : ""}</div>
-                    <div style={{ fontSize:10, color:COLORS.red }}>{item.reason}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
           </>}
 
           {spices.filter(s => s.low).length > 0 && <>
