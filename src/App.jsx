@@ -284,7 +284,47 @@ function rerollSlot(day, meal, recipes, plan, settings) {
 // ============================================================
 // SHOPPING LIST GENERATOR
 // ============================================================
+// Unit conversion: map each unit to a {family, factor-to-base} pair.
+// Mass base = g. Volume base = ml. Count/other = its own family (no conversion).
+const UNIT_CONV = {
+  g:   { family: "mass",   factor: 1 },
+  kg:  { family: "mass",   factor: 1000 },
+  oz:  { family: "mass",   factor: 28.3495 },
+  lb:  { family: "mass",   factor: 453.592 },
+  ml:  { family: "volume", factor: 1 },
+  l:   { family: "volume", factor: 1000 },
+  tsp: { family: "volume", factor: 4.92892 },
+  tbsp:{ family: "volume", factor: 14.7868 },
+  cup: { family: "volume", factor: 236.588 },
+};
+
+function unitInfo(unit) {
+  const u = (unit || "").toLowerCase();
+  return UNIT_CONV[u] || { family: "count:" + u, factor: 1 };
+}
+
+// Pick a human-friendly display unit + value from a base quantity in a family.
+function prettyUnit(family, baseQty) {
+  if (family === "mass") {
+    return baseQty >= 1000
+      ? { qty: baseQty / 1000, unit: "kg" }
+      : { qty: baseQty, unit: "g" };
+  }
+  if (family === "volume") {
+    if (baseQty >= 1000) return { qty: baseQty / 1000, unit: "L" };
+    if (baseQty >= 240)  return { qty: baseQty, unit: "ml" };
+    if (baseQty >= 45)   return { qty: baseQty / 14.7868, unit: "tbsp" };
+    return { qty: baseQty / 4.92892, unit: "tsp" };
+  }
+  // count:<unit> — strip prefix back to the original unit label
+  return { qty: baseQty, unit: family.slice(6) };
+}
+
+function round1(n) { return Math.round(n * 10) / 10; }
+
 function generateShoppingList(plan, recipes, pantry) {
+  // Bucket needs by ingredient name + unit family. Within a family, sum in base units.
+  // needs[name] = { name, category, families: { [family]: baseQty } }
   const needs = {};
   DAYS.forEach(d => MEALS.forEach(m => {
     const slot = plan?.[d]?.[m];
@@ -293,22 +333,40 @@ function generateShoppingList(plan, recipes, pantry) {
     if (!recipe) return;
     for (const ing of recipe.ingredients) {
       const key = normalize(ing.name);
-      if (!needs[key]) needs[key] = { name: ing.name, qty: 0, unit: ing.unit || "", category: guessCategory(ing.name) };
-      needs[key].qty += (ing.qty || 1);
+      if (!needs[key]) needs[key] = { name: ing.name, category: guessCategory(ing.name), families: {} };
+      const info = unitInfo(ing.unit);
+      const base = (ing.qty || 1) * info.factor;
+      needs[key].families[info.family] = (needs[key].families[info.family] || 0) + base;
     }
   }));
 
-  // Subtract pantry
   const items = [];
   for (const [key, need] of Object.entries(needs)) {
     const pantryItem = pantry.find(p => normalize(p.name) === key);
-    const have = pantryItem ? pantryItem.qty : 0;
-    const deficit = need.qty - have;
-    if (deficit > 0) {
-      items.push({
-        name: need.name, qty: Math.round(deficit * 10) / 10, unit: need.unit,
-        category: need.category, store: pantryItem?.store || "", checked: false, source: "plan",
-      });
+
+    for (const [family, baseQty] of Object.entries(need.families)) {
+      let remaining = baseQty;
+
+      // Subtract pantry ONLY if the pantry item's unit is in the same family.
+      if (pantryItem && pantryItem.qty > 0) {
+        const pInfo = unitInfo(pantryItem.unit);
+        if (pInfo.family === family) {
+          remaining -= pantryItem.qty * pInfo.factor;
+        }
+      }
+
+      if (remaining > 0.01) {
+        const disp = prettyUnit(family, remaining);
+        items.push({
+          name: need.name,
+          qty: round1(disp.qty),
+          unit: disp.unit,
+          category: need.category,
+          store: pantryItem?.store || "",
+          checked: false,
+          source: "plan",
+        });
+      }
     }
   }
   return items;
@@ -316,11 +374,11 @@ function generateShoppingList(plan, recipes, pantry) {
 
 function getFloorItems(pantry) {
   return pantry.filter(p => p.floor > 0 && p.qty <= p.floor).map(p => ({
-    name: p.name, qty: Math.round((p.floor - p.qty + 1) * 10) / 10, unit: p.unit,
+    name: p.name, qty: round1(p.floor - p.qty), unit: p.unit,
     category: guessCategory(p.name), store: p.store || "",
     reason: `${p.qty < p.floor ? "Below" : "At"} floor (${p.qty}/${p.floor})`,
     checked: false, source: "floor",
-  }));
+  })).filter(i => i.qty > 0);
 }
 
 // ============================================================
@@ -669,7 +727,7 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings }) {
       const next = JSON.parse(JSON.stringify(prev));
       if (!next[day]) next[day] = {};
       next[day][meal] = {
-        recipeId: recipe.id, recipeName: recipe.name, chunk: "1/1", locked: false,
+        recipeId: recipe.id, recipeName: recipe.name, chunk: "1/1", locked: true,
       };
       return next;
     });
