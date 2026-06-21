@@ -115,13 +115,16 @@ function excludeApplies(ex, activePersonIds) {
   return activePersonIds.has(ex.scope);
 }
 
-// Qualification engine (K). Given a recipe and the active+applicable excludes,
-// decide whether it can be made and what gets left out:
-//   - excluded ingredient on an ESSENTIAL tier  -> recipe DISQUALIFIED
+// Qualification engine (K) + omission threshold (L). Given a recipe and the
+// active+applicable excludes, decide whether it can be made and what gets
+// left out:
+//   - excluded ingredient on an ESSENTIAL tier   -> recipe DISQUALIFIED
 //   - excluded ingredient on SECONDARY tier only -> recipe QUALIFIES, omit it
-// Legacy untiered ingredients are treated as essential (nothing silently
-// becomes omittable). Returns { qualified, omitted:[names], blockedBy:[{ingredient,scope}] }.
-function qualifyRecipe(recipe, excludes, activePersonIds, now = Date.now()) {
+//   - more than maxOmissions secondary omissions  -> recipe DISQUALIFIED
+//     (too many accessories gone — not worth making this span)
+// Legacy untiered ingredients are treated as essential. Returns
+// { qualified, omitted:[names], blockedBy:[{ingredient,scope}], tooManyOmissions:bool }.
+function qualifyRecipe(recipe, excludes, activePersonIds, now = Date.now(), maxOmissions = Infinity) {
   const omitted = [];
   const blockedBy = [];
   for (const ex of excludes) {
@@ -138,7 +141,11 @@ function qualifyRecipe(recipe, excludes, activePersonIds, now = Date.now()) {
       }
     }
   }
-  return { qualified: blockedBy.length === 0, omitted, blockedBy };
+  const tooMany = omitted.length > maxOmissions;
+  return {
+    qualified: blockedBy.length === 0 && !tooMany,
+    omitted, blockedBy, tooManyOmissions: tooMany,
+  };
 }
 
 function normalize(s) {
@@ -262,7 +269,7 @@ function calcWeight(recipe, settings, planTagCounts, activePersonIds = null) {
   const { tagWeights, boosts, excludes, ranges } = settings;
   const now = Date.now();
   // Qualification: essential exclusion disqualifies (weight 0).
-  if (!qualifyRecipe(recipe, excludes, activePersonIds, now).qualified) return 0;
+  if (!qualifyRecipe(recipe, excludes, activePersonIds, now, settings.maxOmissions).qualified) return 0;
   if (recipe.quarantine) return 0;
 
   let starW = (recipe.stars || 3) / 5;
@@ -324,7 +331,7 @@ function generatePlan(recipes, existingPlan, settings, activePersonIds = null) {
   const eligible = recipes.filter(r => {
     if (r.quarantine) return false;
     // Qualification engine: essential exclusion disqualifies; secondary omits.
-    if (!qualifyRecipe(r, excludes, activePersonIds, now).qualified) return false;
+    if (!qualifyRecipe(r, excludes, activePersonIds, now, settings.maxOmissions).qualified) return false;
     for (const rl of redList) {
       for (const ing of r.ingredients) {
         if (normalize(ing.name) === normalize(rl)) return false;
@@ -443,7 +450,7 @@ function rerollSlot(day, meal, recipes, plan, settings, activePersonIds = null) 
   const eligible = recipes.filter(r => {
     if (r.quarantine || r.id === currentRecipeId) return false;
     if (!(r.mealTags || []).includes(mealKey)) return false;
-    if (!qualifyRecipe(r, settings.excludes, activePersonIds, now).qualified) return false;
+    if (!qualifyRecipe(r, settings.excludes, activePersonIds, now, settings.maxOmissions).qualified) return false;
     return true;
   });
 
@@ -1262,7 +1269,7 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
             if (!r.name.toLowerCase().includes(q) && !(r.tags||[]).some(t => t.includes(q))) return false;
           }
           return true;
-        }).map(r => ({ r, qual: qualifyRecipe(r, settings.excludes, activeIds, now) }))
+        }).map(r => ({ r, qual: qualifyRecipe(r, settings.excludes, activeIds, now, settings.maxOmissions) }))
           // Qualified first, then by stars.
           .sort((a, b) => (b.qual.qualified - a.qual.qualified) || ((b.r.stars || 0) - (a.r.stars || 0)));
 
@@ -1306,9 +1313,14 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
                       {(r.tags||[]).map(t => <Badge key={t} color={COLORS.primary} bg={`${COLORS.primary}15`} style={{ fontSize:9, padding:"1px 5px" }}>{t}</Badge>)}
                       <span style={{ fontSize:10, color:COLORS.textSec }}>{r.servings} srv</span>
                     </div>
-                    {!qual.qualified && (
+                    {!qual.qualified && qual.blockedBy.length > 0 && (
                       <div style={{ fontSize:9, color:COLORS.quarantine, marginTop:2 }}>
                         ⚠ contains {qual.blockedBy.map(b => b.ingredient).join(", ")} (essential)
+                      </div>
+                    )}
+                    {!qual.qualified && qual.blockedBy.length === 0 && qual.tooManyOmissions && (
+                      <div style={{ fontSize:9, color:COLORS.quarantine, marginTop:2 }}>
+                        ⚠ too many omissions ({qual.omitted.join(", ")})
                       </div>
                     )}
                     {qual.qualified && qual.omitted.length > 0 && (
@@ -1938,10 +1950,11 @@ function PeopleSection({ people, setPeople }) {
 
 function CookingSection({ settings, update }) {
   const auto = !!settings.autoDecrement;
+  const maxOm = settings.maxOmissions ?? 2;
   return (
     <div>
       <div style={{ fontSize:12, color:COLORS.textSec, marginBottom:10 }}>Cooking behavior</div>
-      <Card style={{ padding:"12px 14px" }}>
+      <Card style={{ padding:"12px 14px", marginBottom:10 }}>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <div onClick={() => update("autoDecrement", !auto)} style={{ width:44, height:26, borderRadius:13, background:auto?COLORS.primary:COLORS.border, position:"relative", cursor:"pointer", flexShrink:0, transition:"background 0.15s" }}>
             <div style={{ width:20, height:20, borderRadius:10, background:"#fff", position:"absolute", top:3, left:auto?21:3, transition:"left 0.15s", boxShadow:"0 1px 3px rgba(0,0,0,0.2)" }} />
@@ -1949,6 +1962,19 @@ function CookingSection({ settings, update }) {
           <div style={{ flex:1 }}>
             <div style={{ fontSize:14, fontWeight:600 }}>Auto-decrement on cook</div>
             <div style={{ fontSize:11, color:COLORS.textSec }}>{auto ? "Marking cooked deducts ingredients immediately" : "Marking cooked shows a confirm screen first"}</div>
+          </div>
+        </div>
+      </Card>
+      <Card style={{ padding:"12px 14px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:14, fontWeight:600 }}>Max secondary omissions</div>
+            <div style={{ fontSize:11, color:COLORS.textSec }}>A recipe needing more than this many accessory ingredients dropped (to satisfy restrictions) is disqualified.</div>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+            <button onClick={() => update("maxOmissions", Math.max(0, maxOm - 1))} style={{ width:26, height:26, borderRadius:5, border:`1px solid ${COLORS.border}`, background:COLORS.surface, cursor:"pointer", fontSize:15, fontWeight:700, color:COLORS.textSec }}>−</button>
+            <span style={{ fontSize:16, fontWeight:700, minWidth:20, textAlign:"center" }}>{maxOm}</span>
+            <button onClick={() => update("maxOmissions", maxOm + 1)} style={{ width:26, height:26, borderRadius:5, border:`1px solid ${COLORS.border}`, background:COLORS.surface, cursor:"pointer", fontSize:15, fontWeight:700, color:COLORS.textSec }}>+</button>
           </div>
         </div>
       </Card>
@@ -2179,6 +2205,7 @@ const DEFAULT_SETTINGS = {
   redList: [],
   excludes: [],
   boosts: [],
+  maxOmissions: 2,
 };
 
 const emptyPlan = () => {
