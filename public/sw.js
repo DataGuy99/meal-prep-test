@@ -1,4 +1,4 @@
-const CACHE_NAME = 'prep-v1';
+const CACHE_NAME = 'prep-__BUILD_ID__';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

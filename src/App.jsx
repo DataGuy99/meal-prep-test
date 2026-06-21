@@ -4,9 +4,9 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 // CONSTANTS
 // ============================================================
 const COLORS = {
-  bg: "#FAFAF7", surface: "#F0EDE6", surfaceAlt: "#E6E1D8",
-  primary: "#3D6B2E", primaryLight: "#5A8A47",
-  red: "#C4532A", redLight: "#F4E0DA",
+  bg: "#FAFAF7", surface: "#F0EDE6",
+  primary: "#3D6B2E",
+  red: "#C4532A",
   text: "#1A1A1A", textSec: "#7A7067", border: "#DDD8CE",
   breakfast: "#7CB342", breakfastBg: "#E8F5C8",
   lunch: "#3949AB", lunchBg: "#D6DAF0",
@@ -35,7 +35,6 @@ const TABS = ["Recipes","Plan","Shop","Pantry","Settings"];
 const DEFAULT_TAGS = ["chicken","beef","pork","seafood","fish","salad","grain","pasta","soup","pastry","vegetarian","curry","stir-fry","sandwich","bowl","stew"];
 const DEFAULT_STORES = ["aldi","costco","walmart","kroger","trader joes","butcher","farmers market","other"];
 const UNITS = ["","g","kg","oz","lb","ml","L","cup","tbsp","tsp","pcs","can","bottle","bag","head","bunch","clove","stalk","block","tub","fillet","slice"];
-const CATEGORIES = ["Produce","Meat","Seafood","Dairy","Bakery","Pantry","Frozen","Beverages","Spices","Other"];
 
 // ============================================================
 // PERSISTENCE
@@ -44,8 +43,19 @@ function load(key, fallback) {
   try { const v = localStorage.getItem("prep_" + key); return v ? JSON.parse(v) : fallback; }
   catch { return fallback; }
 }
+let _quotaWarned = false;
 function save(key, val) {
-  try { localStorage.setItem("prep_" + key, JSON.stringify(val)); } catch {}
+  try {
+    localStorage.setItem("prep_" + key, JSON.stringify(val));
+    return true;
+  } catch (e) {
+    const isQuota = e && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED" || e.code === 22 || e.code === 1014);
+    if (isQuota && !_quotaWarned) {
+      _quotaWarned = true;
+      try { alert("Storage is full — recent changes may not be saved. Export a backup from Settings → Data, then clear old data to free space."); } catch {}
+    }
+    return false;
+  }
 }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
