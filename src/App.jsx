@@ -187,7 +187,7 @@ function trimHistory(hist) {
 }
 
 function calcWeight(recipe, settings, planTagCounts) {
-  const { tagWeights, boosts, excludes } = settings;
+  const { tagWeights, boosts, excludes, ranges } = settings;
   const now = Date.now();
   // Hard exclude check
   for (const ex of excludes) {
@@ -205,15 +205,42 @@ function calcWeight(recipe, settings, planTagCounts) {
     tagW += (tagWeights[t] || 10) / 100;
   }
   let fatigue = calcFatigueRecency(recipe);
+
+  // Boosts: each boost contributes its weight AT MOST ONCE per recipe,
+  // whether it matches a tag or one-or-more ingredients (no stacking).
+  // Ingredient match is exact or whole-word (so "chicken" matches
+  // "chicken thigh" but not "licorice"; avoids substring bleed).
   let boostMul = 1;
+  const recipeTags = recipe.tags || [];
   for (const b of boosts) {
     const item = normalize(b.item);
-    if ((recipe.tags || []).includes(item)) boostMul += (b.weight || 10) / 100;
-    for (const ing of recipe.ingredients) {
-      if (normalize(ing.name).includes(item)) boostMul += (b.weight || 10) / 100;
+    if (!item) continue;
+    const matchesTag = recipeTags.includes(item);
+    const matchesIng = recipe.ingredients.some(ing => {
+      const n = normalize(ing.name);
+      return n === item || n.split(" ").includes(item);
+    });
+    if (matchesTag || matchesIng) boostMul += (b.weight || 10) / 100;
+  }
+
+  // Soft range pressure: as a ranged tag approaches its max within the plan,
+  // taper this recipe's weight. Gradual downward pressure that complements the
+  // hard >= max cutoff in generatePlan. Below min, no penalty (1.0).
+  let rangeMul = 1;
+  if (ranges && planTagCounts) {
+    for (const range of ranges) {
+      if (!recipeTags.includes(range.tag)) continue;
+      const count = planTagCounts[range.tag] || 0;
+      if (range.max > 0 && count >= range.min) {
+        // Linear taper from 1.0 (at min) down toward 0.15 (at max).
+        const span = Math.max(1, range.max - range.min);
+        const over = Math.min(span, count - range.min);
+        rangeMul *= Math.max(0.15, 1 - (over / span) * 0.85);
+      }
     }
   }
-  return starW * (1 + tagW) * fatigue * boostMul;
+
+  return starW * (1 + tagW) * fatigue * boostMul * rangeMul;
 }
 
 function generatePlan(recipes, existingPlan, settings) {
