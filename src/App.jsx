@@ -100,6 +100,21 @@ const NORM_KEEP = new Set([
   "species","kiwi","chili","gas",
 ]);
 
+// An exclude is active if permanent (no expiry) or not yet expired.
+function excludeActive(ex, now = Date.now()) {
+  return !ex.expiresAt || ex.expiresAt > now;
+}
+// Does this exclude apply given a set of active person ids? "all"-scoped
+// excludes always apply. Person-scoped excludes apply only when that person
+// is among the active eaters. If activePersonIds is null, scope is ignored
+// (treat every active exclude as applying — used where we don't yet filter
+// by who's eating).
+function excludeApplies(ex, activePersonIds) {
+  if (!ex.scope || ex.scope === "all") return true;
+  if (!activePersonIds) return true;
+  return activePersonIds.has(ex.scope);
+}
+
 function normalize(s) {
   let w = s.toLowerCase().trim().replace(/-/g, " ").replace(/\s+/g, " ");
   if (!w) return w;
@@ -222,7 +237,7 @@ function calcWeight(recipe, settings, planTagCounts) {
   const now = Date.now();
   // Hard exclude check
   for (const ex of excludes) {
-    if (ex.expiresAt > now) {
+    if (excludeActive(ex)) {
       for (const ing of recipe.ingredients) {
         if (normalize(ing.name) === normalize(ex.ingredient)) return 0;
       }
@@ -289,7 +304,7 @@ function generatePlan(recipes, existingPlan, settings) {
   const eligible = recipes.filter(r => {
     if (r.quarantine) return false;
     for (const ex of excludes) {
-      if (ex.expiresAt > now) {
+      if (excludeActive(ex)) {
         for (const ing of r.ingredients) {
           if (normalize(ing.name) === normalize(ex.ingredient)) return false;
         }
@@ -414,7 +429,7 @@ function rerollSlot(day, meal, recipes, plan, settings) {
     if (r.quarantine || r.id === currentRecipeId) return false;
     if (!(r.mealTags || []).includes(mealKey)) return false;
     for (const ex of settings.excludes) {
-      if (ex.expiresAt > now) {
+      if (excludeActive(ex)) {
         for (const ing of r.ingredients) {
           if (normalize(ing.name) === normalize(ex.ingredient)) return false;
         }
@@ -1226,7 +1241,7 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
           if (r.quarantine) return false;
           if (!(r.mealTags || []).includes(mealKey)) return false;
           for (const ex of settings.excludes) {
-            if (ex.expiresAt > now) {
+            if (excludeActive(ex)) {
               for (const ing of r.ingredients) {
                 if (normalize(ing.name) === normalize(ex.ingredient)) return false;
               }
@@ -1819,7 +1834,7 @@ function SettingsTab({ settings, setSettings, people, setPeople }) {
       {section === "targets" && <MealTargetsSection targets={settings.mealTargets} onChange={v => update("mealTargets", v)} />}
       {section === "ranges" && <RangesSection ranges={settings.ranges} onChange={v => update("ranges", v)} tagWeights={settings.tagWeights} />}
       {section === "redlist" && <RedListSection redList={settings.redList} onChange={v => update("redList", v)} />}
-      {section === "excludes" && <ExcludesSection excludes={settings.excludes} onChange={v => update("excludes", v)} />}
+      {section === "excludes" && <ExcludesSection excludes={settings.excludes} onChange={v => update("excludes", v)} people={people} />}
       {section === "boosts" && <BoostsSection boosts={settings.boosts} onChange={v => update("boosts", v)} />}
       {section === "cooking" && <CookingSection settings={settings} update={update} />}
       {section === "data" && <DataSection />}
@@ -2004,28 +2019,71 @@ function RedListSection({ redList, onChange }) {
   );
 }
 
-function ExcludesSection({ excludes, onChange }) {
+function ExcludesSection({ excludes, onChange, people }) {
   const [newIng, setNewIng] = useState("");
+  const [newScope, setNewScope] = useState("all");
+  const [permanent, setPermanent] = useState(true);
   const [newDays, setNewDays] = useState(14);
   const now = Date.now();
-  const active = excludes.filter(e => e.expiresAt > now);
+
+  // An exclude is active if it has no expiry (permanent) or hasn't expired.
+  const isActive = (ex) => !ex.expiresAt || ex.expiresAt > now;
+  const active = excludes.filter(isActive);
+
+  const scopeLabel = (scope) => {
+    if (scope === "all" || !scope) return "Everyone";
+    const p = people.find(x => x.id === scope);
+    return p ? p.name : "Everyone";
+  };
+
+  function addExclude() {
+    if (!newIng.trim()) return;
+    const ex = { ingredient: normalize(newIng), scope: newScope };
+    if (!permanent) ex.expiresAt = now + newDays * 86400000;
+    onChange([...excludes, ex]);
+    setNewIng("");
+  }
+
   return (
     <div>
-      <div style={{ fontSize:12, color:COLORS.textSec, marginBottom:10 }}>Hard-excluded with expiry</div>
+      <div style={{ fontSize:12, color:COLORS.textSec, marginBottom:10 }}>
+        Exclude ingredients for everyone or one person. Permanent for allergies/dislikes; time-boxed for temporary avoids.
+      </div>
       {active.map((ex, i) => {
-        const daysLeft = Math.ceil((ex.expiresAt - now) / 86400000);
+        const realIdx = excludes.indexOf(ex);
+        const daysLeft = ex.expiresAt ? Math.ceil((ex.expiresAt - now) / 86400000) : null;
         return (
-          <div key={i} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8, padding:"10px 12px", borderRadius:8, background:COLORS.surface }}>
-            <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{ex.ingredient}</span>
-            <Badge color={COLORS.red} bg={COLORS.quarantineBg}>{daysLeft}d left</Badge>
-            <Btn small variant="ghost" style={{ fontSize:11, padding:"3px 8px" }} onClick={() => onChange(excludes.filter((_, j) => j !== i))}>Lift</Btn>
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8, padding:"10px 12px", borderRadius:8, background:COLORS.surface }}>
+            <div style={{ flex:1, minWidth:0 }}>
+              <span style={{ fontSize:13, fontWeight:600 }}>{ex.ingredient}</span>
+              <div style={{ fontSize:10, color:COLORS.textSec }}>{scopeLabel(ex.scope)}</div>
+            </div>
+            {daysLeft != null
+              ? <Badge color={COLORS.red} bg={COLORS.quarantineBg}>{daysLeft}d left</Badge>
+              : <Badge color={COLORS.lock} bg={COLORS.surface}>permanent</Badge>}
+            <Btn small variant="ghost" style={{ fontSize:11, padding:"3px 8px" }} onClick={() => onChange(excludes.filter((_, j) => j !== realIdx))}>Lift</Btn>
           </div>
         );
       })}
-      <div style={{ display:"flex", gap:6, marginTop:10, flexWrap:"wrap" }}>
-        <input value={newIng} onChange={e => setNewIng(e.target.value)} placeholder="Ingredient..." style={{ flex:1, minWidth:100, padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
-        <input type="number" value={newDays} onChange={e => setNewDays(+e.target.value)} style={{ width:60, padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
-        <Btn small onClick={() => { if (newIng.trim()) { onChange([...excludes, { ingredient: normalize(newIng), expiresAt: now + newDays * 86400000 }]); setNewIng(""); } }}>Exclude</Btn>
+      <div style={{ display:"flex", flexDirection:"column", gap:6, marginTop:10, padding:"10px 12px", borderRadius:8, background:COLORS.surface }}>
+        <input value={newIng} onChange={e => setNewIng(e.target.value)} placeholder="Ingredient..." style={{ padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
+        <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
+          <span style={{ fontSize:11, color:COLORS.textSec, fontWeight:600 }}>For:</span>
+          <select value={newScope} onChange={e => setNewScope(e.target.value)} style={{ fontSize:12, padding:"5px 8px", borderRadius:5, border:`1px solid ${COLORS.border}`, background:"#fff" }}>
+            <option value="all">Everyone</option>
+            {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <label style={{ display:"flex", alignItems:"center", gap:4, fontSize:12, cursor:"pointer" }}>
+            <input type="checkbox" checked={permanent} onChange={e => setPermanent(e.target.checked)} /> Permanent
+          </label>
+          {!permanent && (
+            <span style={{ display:"flex", alignItems:"center", gap:4 }}>
+              <input type="number" value={newDays} onChange={e => setNewDays(+e.target.value)} style={{ width:50, padding:"5px 6px", borderRadius:5, border:`1px solid ${COLORS.border}`, fontSize:12, textAlign:"center" }} />
+              <span style={{ fontSize:11, color:COLORS.textSec }}>days</span>
+            </span>
+          )}
+          <Btn small onClick={addExclude} style={{ marginLeft:"auto" }}>Exclude</Btn>
+        </div>
       </div>
     </div>
   );
