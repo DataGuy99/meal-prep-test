@@ -801,7 +801,7 @@ function RecipesTab({ recipes, setRecipes, settings, dictionary, setDictionary }
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"" });
 
-  const allTags = useMemo(() => [...new Set([...DEFAULT_TAGS, ...recipes.flatMap(r => r.tags || [])])].sort(), [recipes]);
+  const allTags = useMemo(() => [...new Set([...Object.keys(settings.tagWeights || {}), ...recipes.flatMap(r => r.tags || [])])].sort(), [recipes, settings.tagWeights]);
 
   const filtered = recipes.filter(r => {
     if (filter === "favorites") return r.stars >= 4;
@@ -2340,9 +2340,13 @@ function DataSection() {
 // ============================================================
 // MAIN APP
 // ============================================================
+// Starter food tags seeded on first run — all neutral (50) so there's no
+// hidden food-type bias. The first-open survey lets the user nudge these.
+const STARTER_TAGS = ["beef", "poultry", "fish", "eggs", "salad", "pasta", "grain", "vegetarian"];
 const DEFAULT_SETTINGS = {
-  tagWeights: { chicken:30, beef:25, salad:12, pasta:18, seafood:15, soup:10, grain:14, curry:20, vegetarian:10, pastry:8 },
-  mealTargets: { Breakfast:{ min:40, max:80 }, Lunch:{ min:80, max:120 }, Dinner:{ min:50, max:90 } },
+  tagWeights: Object.fromEntries(STARTER_TAGS.map(t => [t, 50])),
+  // Neutral heaviness (center 70 ± 20) for every meal — no built-in bias.
+  mealTargets: { Breakfast:{ min:50, max:90 }, Lunch:{ min:50, max:90 }, Dinner:{ min:50, max:90 } },
   ranges: [],
   redList: [],
   excludes: [],
@@ -2356,6 +2360,63 @@ const emptyPlan = () => {
   return p;
 };
 
+// First-open calibration survey. Fades in over a fresh install, lets the user
+// shape food preferences + meal heaviness on gradient scales, fully skippable.
+// Writes directly to settings (same values the Settings Preferences tab edits)
+// and sets the seen-flag so it never reappears.
+function FirstRunSurvey({ settings, setSettings, onClose }) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setVisible(true), 60); return () => clearTimeout(t); }, []);
+
+  const tagWeights = settings.tagWeights || {};
+  const targets = settings.mealTargets || {};
+  const tags = Object.keys(tagWeights).sort((a, b) => a.localeCompare(b));
+
+  const setTag = (tag, val) => setSettings(prev => ({ ...prev, tagWeights: { ...prev.tagWeights, [tag]: Math.max(0, Math.min(100, Math.round(val))) } }));
+  const setMeal = (m, h) => setSettings(prev => ({ ...prev, mealTargets: { ...prev.mealTargets, [m]: heavinessToBand(h) } }));
+
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:100, display:"flex", alignItems:"center", justifyContent:"center", padding:16,
+      background:`rgba(20,18,15,${visible?0.5:0})`, transition:"background 0.8s ease", backdropFilter:visible?"blur(2px)":"none" }}>
+      <div style={{ background:COLORS.bg, borderRadius:16, width:"100%", maxWidth:440, maxHeight:"88vh", overflowY:"auto",
+        padding:"22px 20px", boxShadow:"0 12px 48px rgba(0,0,0,0.3)",
+        opacity:visible?1:0, transform:visible?"translateY(0) scale(1)":"translateY(16px) scale(0.98)",
+        transition:"opacity 0.8s ease, transform 0.8s ease" }}>
+        <div style={{ fontSize:20, fontWeight:800, color:COLORS.primary, marginBottom:4 }}>Welcome 👋</div>
+        <div style={{ fontSize:13, color:COLORS.textSec, marginBottom:18, lineHeight:1.4 }}>
+          Tell us what your household likes and we'll tailor your meal plans. Slide toward <span style={{ color:"#C4532A", fontWeight:600 }}>more</span> or <span style={{ color:"#3A6FB0", fontWeight:600 }}>less</span> — or just skip and adjust later.
+        </div>
+
+        <SectionLabel>How much do you like…</SectionLabel>
+        <div style={{ display:"flex", flexDirection:"column", gap:13, marginBottom:6 }}>
+          {tags.map(tag => (
+            <div key={tag}>
+              <div style={{ fontSize:13, fontWeight:600, marginBottom:3, textTransform:"capitalize" }}>{tag}</div>
+              <GradientScale value={tagWeights[tag]} min={0} max={100} onChange={v => setTag(tag, v)} leftLabel="less" rightLabel="more" />
+            </div>
+          ))}
+        </div>
+
+        <SectionLabel>How heavy should each meal be?</SectionLabel>
+        <div style={{ display:"flex", flexDirection:"column", gap:13 }}>
+          {MEALS.map(m => (
+            <div key={m}>
+              <div style={{ fontSize:13, fontWeight:700, color:MC[m].fg, marginBottom:3 }}>{m}</div>
+              <GradientScale value={bandToHeaviness(targets[m])} min={0} max={140} onChange={h => setMeal(m, h)} leftLabel="light" rightLabel="heavy" />
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display:"flex", gap:8, marginTop:22 }}>
+          <Btn style={{ flex:1 }} onClick={onClose}>Done</Btn>
+          <Btn variant="ghost" onClick={onClose}>Skip</Btn>
+        </div>
+        <div style={{ fontSize:10, color:COLORS.textSec, textAlign:"center", marginTop:8 }}>You can recalibrate anytime in Settings → Preferences.</div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState("Recipes");
   const [recipes, setRecipesRaw] = useState(() => load("recipes", []));
@@ -2364,6 +2425,7 @@ export default function App() {
   const [settings, setSettingsRaw] = useState(() => load("settings", DEFAULT_SETTINGS));
   const [dictionary, setDictionaryRaw] = useState(() => load("dictionary", []));
   const [people, setPeopleRaw] = useState(() => load("people", []));
+  const [seenSurvey, setSeenSurvey] = useState(() => load("seenSurvey", false));
   const [spices, setSpicesRaw] = useState(() => load("spices", []));
 
   // Persist INSIDE the functional updater so React supplies the true latest
@@ -2410,6 +2472,13 @@ export default function App() {
           </button>
         ))}
       </div>
+      {!seenSurvey && (
+        <FirstRunSurvey
+          settings={settings}
+          setSettings={setSettings}
+          onClose={() => { setSeenSurvey(true); save("seenSurvey", true); }}
+        />
+      )}
     </div>
   );
 }
