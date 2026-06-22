@@ -822,7 +822,9 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
   const [filter, setFilter] = useState("all");
   const [expandedId, setExpandedId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null); // recipe id being edited, or null for new
   const [addForm, setAddForm] = useState({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"", instructions:"" });
+  const formRef = useRef(null);
 
   const allTags = useMemo(() => [...new Set([...Object.keys(settings.tagWeights || {}), ...recipes.flatMap(r => r.tags || [])])].sort(), [recipes, settings.tagWeights]);
 
@@ -847,6 +849,41 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
     bg: COLORS.quarantineBg, color: COLORS.quarantine,
   }));
 
+  const blankForm = { name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"", instructions:"" };
+
+  // Serialize a recipe's ingredients of one tier back into editable text lines.
+  // Keep the quantity whenever there's a unit (so "1 kg beef" round-trips); only
+  // drop a bare "1" when there's no unit ("1 onion" -> "onion").
+  function ingsToText(ingredients, tier) {
+    return ingredients
+      .filter(i => (i.tier || "essential") === tier)
+      .map(i => {
+        const showQty = i.qty && (i.qty !== 1 || i.unit);
+        return `${showQty ? i.qty + " " : ""}${i.unit ? i.unit + " " : ""}${i.name}`.trim();
+      })
+      .join("\n");
+  }
+
+  function startEdit(r) {
+    setAddForm({
+      name: r.name, tags: r.tags || [], mealTags: r.mealTags || [],
+      servings: r.servings, slotsMin: r.slotsMin, slotsMax: r.slotsMax, stars: r.stars,
+      essentialText: ingsToText(r.ingredients, "essential"),
+      secondaryText: ingsToText(r.ingredients, "secondary"),
+      instructions: r.instructions || "",
+    });
+    setEditId(r.id);
+    setShowAdd(true);
+    setExpandedId(null);
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  }
+
+  function closeForm() {
+    setShowAdd(false);
+    setEditId(null);
+    setAddForm(blankForm);
+  }
+
   function saveRecipe() {
     const parseTier = (text, tier) => text.split("\n").map(parseIngredientLine).filter(Boolean)
       .map(ing => ({ ...ing, name: findMatch(ing.name, dictionary), tier }));
@@ -860,18 +897,25 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
     const redHits = newIngs.filter(ing => settings.redList.some(rl => normalize(rl) === normalize(ing.name)));
     const isQ = redHits.length > 0;
 
-    const recipe = {
-      id: uid(), name: addForm.name.trim(), stars: addForm.stars,
+    const core = {
+      name: addForm.name.trim(), stars: addForm.stars,
       tags: addForm.tags, mealTags: addForm.mealTags,
       servings: addForm.servings, slotsMin: addForm.slotsMin, slotsMax: addForm.slotsMax,
       ingredients: newIngs, quarantine: isQ,
       instructions: addForm.instructions.trim(),
       quarantineItems: redHits.map(r => ({ ingredient: r.name, sub: "" })),
-      lastUsed: null, useCount: 0, useHistory: [], shelvedUntil: null, createdAt: Date.now(),
     };
-    setRecipes(prev => [...prev, recipe]);
-    setAddForm({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"", instructions:"" });
-    setShowAdd(false);
+
+    if (editId) {
+      // Update existing — preserve usage history, dates, shelving.
+      setRecipes(prev => prev.map(r => r.id === editId ? { ...r, ...core } : r));
+    } else {
+      setRecipes(prev => [...prev, {
+        id: uid(), ...core,
+        lastUsed: null, useCount: 0, useHistory: [], shelvedUntil: null, createdAt: Date.now(),
+      }]);
+    }
+    closeForm();
   }
 
   function deleteRecipe(id) { setRecipes(prev => prev.filter(r => r.id !== id)); }
@@ -997,6 +1041,7 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
                   </div>
                 )}
                 <div style={{ marginTop:8, display:"flex", gap:6, flexWrap:"wrap" }}>
+                  <Btn small variant="primary" onClick={() => startEdit(r)}>✏️ Edit recipe</Btn>
                   {r.shelvedUntil && r.shelvedUntil > Date.now() && (
                     <Btn small variant="ghost" style={{ color:COLORS.lock, borderColor:COLORS.lock }} onClick={() => updateRecipe(r.id, { shelvedUntil: null })}>
                       💤 Unshelve ({Math.ceil((r.shelvedUntil - Date.now())/86400000)}d left)
@@ -1013,8 +1058,9 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
         {!showAdd ? (
           recipes.length > 0 && <Btn onClick={() => setShowAdd(true)} style={{ width:"100%" }}>+ Add Recipe</Btn>
         ) : (
+          <div ref={formRef}>
           <Card style={{ border:`2px solid ${COLORS.primary}` }}>
-            <div style={{ fontSize:14, fontWeight:700, color:COLORS.primary, marginBottom:10 }}>New Recipe</div>
+            <div style={{ fontSize:14, fontWeight:700, color:COLORS.primary, marginBottom:10 }}>{editId ? "Edit Recipe" : "New Recipe"}</div>
             <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
               <input placeholder="Recipe name" value={addForm.name} onChange={e => setAddForm(p => ({ ...p, name: e.target.value }))} style={{ padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14 }} />
               <div>
@@ -1064,11 +1110,12 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
                 <textarea placeholder={"1. Brown the chicken...\n2. Add the sauce and simmer 20 min...\n3. Serve over rice"} value={addForm.instructions} onChange={e => setAddForm(p => ({ ...p, instructions: e.target.value }))} rows={4} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, resize:"vertical", fontFamily:"inherit" }} />
               </div>
               <div style={{ display:"flex", gap:8 }}>
-                <Btn style={{ flex:1 }} onClick={saveRecipe} disabled={!addForm.name.trim() || !addForm.essentialText.trim()}>Save Recipe</Btn>
-                <Btn variant="ghost" onClick={() => setShowAdd(false)}>Cancel</Btn>
+                <Btn style={{ flex:1 }} onClick={saveRecipe} disabled={!addForm.name.trim() || !addForm.essentialText.trim()}>{editId ? "Save Changes" : "Save Recipe"}</Btn>
+                <Btn variant="ghost" onClick={closeForm}>Cancel</Btn>
               </div>
             </div>
           </Card>
+          </div>
         )}
       </div>
     </div>
