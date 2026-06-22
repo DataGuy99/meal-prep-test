@@ -1997,6 +1997,40 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
   const [addForm, setAddForm] = useState({ name:"", qty:1, unit:"pcs", floor:0, storage:"dry", store:"" });
   const [spicesOpen, setSpicesOpen] = useState(false);
   const [newSpice, setNewSpice] = useState("");
+  const [dragSpice, setDragSpice] = useState(null);  // id being dragged
+  const [overSpice, setOverSpice] = useState(null);   // id currently hovered over
+
+  // Move the dragged spice to the position of the target spice.
+  function moveSpice(draggedId, targetId) {
+    if (!draggedId || draggedId === targetId) return;
+    setSpices(prev => {
+      const arr = [...prev];
+      const from = arr.findIndex(s => s.id === draggedId);
+      const to = arr.findIndex(s => s.id === targetId);
+      if (from < 0 || to < 0) return prev;
+      const [moved] = arr.splice(from, 1);
+      arr.splice(to, 0, moved);
+      return arr;
+    });
+  }
+
+  // Touch reorder: hit-test the chip under the finger via elementFromPoint.
+  function spiceTouchMove(e) {
+    if (!dragSpice) return;
+    const t = e.touches[0];
+    if (!t) return;
+    const el = document.elementFromPoint(t.clientX, t.clientY);
+    const chip = el && el.closest("[data-spice-id]");
+    if (chip) {
+      const id = chip.getAttribute("data-spice-id");
+      if (id && id !== overSpice) setOverSpice(id);
+    }
+  }
+  function spiceDrop() {
+    if (dragSpice && overSpice) moveSpice(dragSpice, overSpice);
+    setDragSpice(null);
+    setOverSpice(null);
+  }
 
   const allStores = useMemo(() => [...new Set([...DEFAULT_STORES, ...pantry.map(p => p.store).filter(Boolean)])].sort(), [pantry]);
 
@@ -2146,13 +2180,40 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
             <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:8 }}>
               No quantities — just tap a spice when it's running low to add it to the shopping list.
             </div>
-            <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}>
-              {spices.map(s => (
-                <span key={s.id} onClick={() => setSpices(prev => prev.map(x => x.id === s.id ? { ...x, low: !x.low } : x))} style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:13, padding:"6px 10px", borderRadius:6, cursor:"pointer", background:s.low?COLORS.quarantineBg:"#fff", border:`1.5px solid ${s.low?COLORS.red:COLORS.border}`, color:s.low?COLORS.red:COLORS.text, fontWeight:s.low?600:400 }}>
-                  {s.low && "🔻"} {s.name}
-                  <span onClick={e => { e.stopPropagation(); setSpices(prev => prev.filter(x => x.id !== s.id)); }} style={{ fontSize:14, color:COLORS.textSec, marginLeft:2 }}>×</span>
-                </span>
-              ))}
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}
+              onTouchMove={spiceTouchMove} onTouchEnd={spiceDrop}>
+              {spices.map(s => {
+                const isOver = overSpice === s.id && dragSpice && dragSpice !== s.id;
+                const isDragging = dragSpice === s.id;
+                return (
+                  <span
+                    key={s.id}
+                    data-spice-id={s.id}
+                    draggable
+                    onDragStart={() => setDragSpice(s.id)}
+                    onDragEnter={() => dragSpice && setOverSpice(s.id)}
+                    onDragEnd={spiceDrop}
+                    onDragOver={e => e.preventDefault()}
+                    onClick={() => { if (!dragSpice) setSpices(prev => prev.map(x => x.id === s.id ? { ...x, low: !x.low } : x)); }}
+                    style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:13, padding:"6px 8px 6px 6px", borderRadius:6, cursor:"pointer",
+                      background:s.low?COLORS.quarantineBg:"#fff",
+                      border:`1.5px solid ${isOver?COLORS.primary:(s.low?COLORS.red:COLORS.border)}`,
+                      color:s.low?COLORS.red:COLORS.text, fontWeight:s.low?600:400,
+                      opacity:isDragging?0.4:1,
+                      boxShadow:isOver?`0 0 0 2px ${COLORS.primary}40`:"none",
+                      transition:"opacity 0.1s, box-shadow 0.1s" }}
+                  >
+                    <span
+                      onPointerDown={() => setDragSpice(s.id)}
+                      onClick={e => e.stopPropagation()}
+                      style={{ cursor:"grab", color:COLORS.textSec, fontSize:13, lineHeight:1, touchAction:"none", padding:"0 2px", userSelect:"none" }}
+                      title="Drag to reorder"
+                    >⠿</span>
+                    {s.low && "🔻"}{s.name}
+                    <span onClick={e => { e.stopPropagation(); setSpices(prev => prev.filter(x => x.id !== s.id)); }} style={{ fontSize:14, color:COLORS.textSec, marginLeft:2 }}>×</span>
+                  </span>
+                );
+              })}
               {spices.length === 0 && <span style={{ fontSize:12, color:COLORS.textSec }}>No spices yet — add some below.</span>}
             </div>
             <div style={{ display:"flex", gap:6 }}>
