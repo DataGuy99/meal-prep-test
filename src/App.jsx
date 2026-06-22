@@ -822,7 +822,7 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
   const [filter, setFilter] = useState("all");
   const [expandedId, setExpandedId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
-  const [addForm, setAddForm] = useState({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"" });
+  const [addForm, setAddForm] = useState({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"", instructions:"" });
 
   const allTags = useMemo(() => [...new Set([...Object.keys(settings.tagWeights || {}), ...recipes.flatMap(r => r.tags || [])])].sort(), [recipes, settings.tagWeights]);
 
@@ -865,11 +865,12 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
       tags: addForm.tags, mealTags: addForm.mealTags,
       servings: addForm.servings, slotsMin: addForm.slotsMin, slotsMax: addForm.slotsMax,
       ingredients: newIngs, quarantine: isQ,
+      instructions: addForm.instructions.trim(),
       quarantineItems: redHits.map(r => ({ ingredient: r.name, sub: "" })),
       lastUsed: null, useCount: 0, useHistory: [], shelvedUntil: null, createdAt: Date.now(),
     };
     setRecipes(prev => [...prev, recipe]);
-    setAddForm({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"" });
+    setAddForm({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"", instructions:"" });
     setShowAdd(false);
   }
 
@@ -960,6 +961,10 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
                     </div>
                   </div>
                 )}
+                <div style={{ marginBottom:10 }}>
+                  <div style={{ fontSize:10, color:COLORS.textSec, fontWeight:600, marginBottom:4 }}>Instructions</div>
+                  <textarea value={r.instructions || ""} onChange={e => updateRecipe(r.id, { instructions: e.target.value })} placeholder="Add steps to make this meal..." rows={3} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1px solid ${COLORS.border}`, fontSize:13, resize:"vertical", fontFamily:"inherit" }} />
+                </div>
                 {(() => {
                   const renderIng = (ing, idx) => {
                     const isRed = settings.redList.some(rl => normalize(rl) === normalize(ing.name));
@@ -1053,6 +1058,11 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
                 <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>Accessories that can be left out. If someone can't have one, it's just omitted and the recipe still works.</div>
                 <textarea placeholder={"3 cloves garlic\n1 onion\ncilantro"} value={addForm.secondaryText} onChange={e => setAddForm(p => ({ ...p, secondaryText: e.target.value }))} rows={3} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, resize:"vertical", fontFamily:"inherit" }} />
               </div>
+              <div>
+                <div style={{ fontSize:11, color:COLORS.text, marginBottom:2, fontWeight:700 }}>Instructions <span style={{ color:COLORS.textSec, fontWeight:400 }}>(optional)</span></div>
+                <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>Steps to make it. Shown when you're cooking the meal.</div>
+                <textarea placeholder={"1. Brown the chicken...\n2. Add the sauce and simmer 20 min...\n3. Serve over rice"} value={addForm.instructions} onChange={e => setAddForm(p => ({ ...p, instructions: e.target.value }))} rows={4} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, resize:"vertical", fontFamily:"inherit" }} />
+              </div>
               <div style={{ display:"flex", gap:8 }}>
                 <Btn style={{ flex:1 }} onClick={saveRecipe} disabled={!addForm.name.trim() || !addForm.essentialText.trim()}>Save Recipe</Btn>
                 <Btn variant="ghost" onClick={() => setShowAdd(false)}>Cancel</Btn>
@@ -1085,6 +1095,7 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
   const [pickerSlot, setPickerSlot] = useState(null);
   const [pickerSearch, setPickerSearch] = useState("");
   const [cookModal, setCookModal] = useState(null); // { day, meal, recipe, lines, spices, untracked }
+  const [viewRecipe, setViewRecipe] = useState(null); // recipe object to show full guidance
   const [genMsg, setGenMsg] = useState("");
 
   // Scale factor for a recipe given the active household. With no portion
@@ -1522,10 +1533,14 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
             {sl.placeholder ? (
               <Btn small variant="ghost" style={{ color:COLORS.red, borderColor:COLORS.red }} onClick={() => removeSlot(selectedSlot.day, selectedSlot.meal)}>Remove</Btn>
             ) : sl.cooked ? (
-              <Btn small variant="ghost" style={{ color:COLORS.gold, borderColor:COLORS.gold }} onClick={() => uncook(selectedSlot.day, selectedSlot.meal)}>↩ Uncook (restore pantry)</Btn>
+              <>
+                <Btn small variant="secondary" onClick={() => { const rec = recipes.find(r => r.id === sl.recipeId); if (rec) setViewRecipe(rec); }}>📖 View recipe</Btn>
+                <Btn small variant="ghost" style={{ color:COLORS.gold, borderColor:COLORS.gold }} onClick={() => uncook(selectedSlot.day, selectedSlot.meal)}>↩ Uncook (restore pantry)</Btn>
+              </>
             ) : (
               <>
                 <Btn small variant="primary" style={{ background:COLORS.gold }} onClick={() => startCook(selectedSlot.day, selectedSlot.meal)}>🍳 Cook</Btn>
+                <Btn small variant="secondary" onClick={() => { const rec = recipes.find(r => r.id === sl.recipeId); if (rec) setViewRecipe(rec); }}>📖 View</Btn>
                 <Btn small variant={sl.locked?"primary":"ghost"} onClick={() => toggleLock(selectedSlot.day, selectedSlot.meal)} style={sl.locked?{ background:COLORS.lock }:{}}>
                   {sl.locked?"🔒 Locked":"🔓 Lock"}
                 </Btn>
@@ -1640,9 +1655,66 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
               <Btn style={{ flex:1, background:COLORS.gold }} onClick={() => applyCook(cookModal.day, cookModal.meal, cookModal.recipe, cookModal)}>Confirm & Cook</Btn>
               <Btn variant="ghost" onClick={() => setCookModal(null)}>Cancel</Btn>
             </div>
+            <div style={{ textAlign:"center", marginTop:8 }}>
+              <span onClick={() => { setViewRecipe(cookModal.recipe); }} style={{ fontSize:12, color:COLORS.primary, cursor:"pointer", textDecoration:"underline" }}>📖 View full recipe & instructions</span>
+            </div>
           </div>
         </div>
       )}
+
+      {viewRecipe && (() => {
+        const factor = scaleFor(viewRecipe);
+        const scaled = (q) => factor === 1 ? q : round1((q || 1) * factor);
+        const essential = viewRecipe.ingredients.filter(i => (i.tier || "essential") === "essential");
+        const secondary = viewRecipe.ingredients.filter(i => i.tier === "secondary");
+        const renderLine = (ing, i) => (
+          <div key={i} style={{ display:"flex", gap:8, padding:"5px 0", borderBottom:`1px solid ${COLORS.border}40` }}>
+            <span style={{ fontSize:13, color:COLORS.textSec, minWidth:64, flexShrink:0 }}>
+              {ing.qty > 0 ? scaled(ing.qty) : ""}{ing.unit ? " " + ing.unit : ""}
+            </span>
+            <span style={{ fontSize:13, flex:1 }}>{ing.name}</span>
+          </div>
+        );
+        return (
+          <div onClick={() => setViewRecipe(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:55 }}>
+            <div onClick={e => e.stopPropagation()} style={{ background:COLORS.bg, borderRadius:"16px 16px 0 0", width:"100%", maxWidth:480, maxHeight:"88vh", overflowY:"auto", padding:"18px 16px max(18px, env(safe-area-inset-bottom))", boxShadow:"0 -4px 24px rgba(0,0,0,0.2)" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:4 }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:18, fontWeight:800 }}>{viewRecipe.name}</div>
+                  <div style={{ display:"flex", gap:5, marginTop:4, flexWrap:"wrap", alignItems:"center" }}>
+                    <StarRating rating={viewRecipe.stars} size={13} />
+                    {(viewRecipe.tags || []).map(t => <Badge key={t} color={COLORS.primary} bg={`${COLORS.primary}18`}>{t}</Badge>)}
+                  </div>
+                </div>
+                <span style={{ fontSize:20, color:COLORS.textSec, cursor:"pointer", marginLeft:8 }} onClick={() => setViewRecipe(null)}>✕</span>
+              </div>
+              <div style={{ fontSize:12, color:COLORS.textSec, marginBottom:14 }}>
+                {factor === 1
+                  ? `Makes ${viewRecipe.servings} serving${viewRecipe.servings>1?"s":""} (recipe scale)`
+                  : `Scaled ${factor.toFixed(2)}× for your household`}
+              </div>
+
+              <SectionLabel>Ingredients</SectionLabel>
+              <div style={{ marginBottom:8 }}>
+                {essential.map(renderLine)}
+                {secondary.length > 0 && <>
+                  <div style={{ fontSize:10, fontWeight:700, color:COLORS.textSec, textTransform:"uppercase", letterSpacing:0.6, marginTop:8, marginBottom:2 }}>Optional</div>
+                  {secondary.map(renderLine)}
+                </>}
+              </div>
+
+              <SectionLabel>Instructions</SectionLabel>
+              {viewRecipe.instructions ? (
+                <div style={{ fontSize:14, lineHeight:1.6, whiteSpace:"pre-wrap" }}>{viewRecipe.instructions}</div>
+              ) : (
+                <div style={{ fontSize:13, color:COLORS.textSec, fontStyle:"italic" }}>No instructions added for this recipe. You can add them by editing the recipe in the Recipes tab.</div>
+              )}
+
+              <Btn style={{ width:"100%", marginTop:18 }} variant="secondary" onClick={() => setViewRecipe(null)}>Close</Btn>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
