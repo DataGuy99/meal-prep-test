@@ -576,9 +576,10 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
 }
 
 function getFloorItems(pantry) {
+  const itemStores = (p) => p.stores && p.stores.length ? p.stores : (p.store ? [p.store] : []);
   return pantry.filter(p => p.floor > 0 && p.qty <= p.floor).map(p => ({
     name: p.name, qty: round1(p.floor - p.qty), unit: p.unit,
-    category: guessCategory(p.name), store: p.store || "",
+    category: guessCategory(p.name), store: itemStores(p).join(", "),
     reason: `${p.qty < p.floor ? "Below" : "At"} floor (${p.qty}/${p.floor})`,
     checked: false, source: "floor",
   })).filter(i => i.qty > 0);
@@ -1945,7 +1946,7 @@ function ShopTab({ plan, recipes, pantry, setPantry, spices, setSpices, settings
           next.push({
             id: uid(), name: normalize(item.name),
             qty: qtyNum || 1, unit: item.unit || "pcs", floor: 0,
-            storage: "dry", store: item.store || "",
+            storage: "dry", stores: item.store ? item.store.split(", ").filter(Boolean) : [],
           });
         }
       }
@@ -2083,7 +2084,7 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
   const [storageFilter, setStorageFilter] = useState("all");
   const [editId, setEditId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
-  const [addForm, setAddForm] = useState({ name:"", qty:1, unit:"pcs", floor:0, storage:"dry", store:"" });
+  const [addForm, setAddForm] = useState({ name:"", qty:1, unit:"pcs", floor:0, storage:"dry", stores:[] });
   const [spicesOpen, setSpicesOpen] = useState(false);
   const [newSpice, setNewSpice] = useState("");
   const [dragSpice, setDragSpice] = useState(null);  // id being dragged
@@ -2121,7 +2122,9 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
     setOverSpice(null);
   }
 
-  const allStores = useMemo(() => [...new Set([...DEFAULT_STORES, ...pantry.map(p => p.store).filter(Boolean)])].sort(), [pantry]);
+  // Stores from all items — supports the new `stores` array and legacy `store` string.
+  const itemStores = (p) => p.stores && p.stores.length ? p.stores : (p.store ? [p.store] : []);
+  const allStores = useMemo(() => [...new Set([...DEFAULT_STORES, ...pantry.flatMap(itemStores)])].sort(), [pantry]);
 
   const filtered = pantry.filter(p => storageFilter === "all" || p.storage === storageFilter)
     .sort((a, b) => {
@@ -2138,7 +2141,7 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
   function addItem() {
     if (!addForm.name.trim()) return;
     setPantry(prev => [...prev, { ...addForm, id: uid(), name: normalize(addForm.name) }]);
-    setAddForm({ name:"", qty:1, unit:"pcs", floor:0, storage:"dry", store:"" });
+    setAddForm({ name:"", qty:1, unit:"pcs", floor:0, storage:"dry", stores:[] });
     setShowAdd(false);
   }
 
@@ -2194,7 +2197,7 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
               </div>
               <div style={{ flex:1 }}>
                 <div style={{ fontSize:10, color:COLORS.textSec, fontWeight:600, marginBottom:2 }}>Store</div>
-                <Combobox options={allStores} value={addForm.store} onChange={v => setAddForm(p => ({ ...p, store: v }))} placeholder="store..." />
+                <Combobox multi options={allStores} selected={addForm.stores} onChange={v => setAddForm(p => ({ ...p, stores: v }))} placeholder="store(s)..." />
               </div>
             </div>
             <div style={{ display:"flex", gap:8 }}>
@@ -2218,7 +2221,7 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
                   <div style={{ fontSize:14, fontWeight:600 }}>{item.name}</div>
                   <div style={{ display:"flex", gap:6, alignItems:"center", marginTop:2 }}>
                     <Badge color={sc.fg} bg={sc.bg}>{sc.label}</Badge>
-                    {item.store && <span style={{ fontSize:10, color:COLORS.textSec }}>{item.store}</span>}
+                    {itemStores(item).length > 0 && <span style={{ fontSize:10, color:COLORS.textSec }}>{itemStores(item).join(", ")}</span>}
                     <span style={{ fontSize:10, color:below?COLORS.quarantine:COLORS.textSec }}>Floor: {item.floor} {item.unit}</span>
                   </div>
                 </div>
@@ -2238,9 +2241,9 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
                     <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Floor</div>
                     <NumberInput value={item.floor} onCommit={v => updateItem(item.id, { floor: v })} min={0} fallback={0} style={{ width:56, padding:"5px 6px", borderRadius:5, border:`1.5px solid ${below?COLORS.quarantine:COLORS.border}`, fontSize:14, textAlign:"center", fontWeight:600 }} />
                   </div>
-                  <div>
-                    <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Store</div>
-                    <Combobox options={allStores} value={item.store} onChange={v => updateItem(item.id, { store: v })} placeholder="store" />
+                  <div style={{ minWidth:140 }}>
+                    <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Store(s)</div>
+                    <Combobox multi options={allStores} selected={itemStores(item)} onChange={v => updateItem(item.id, { stores: v, store: undefined })} placeholder="store(s)" />
                   </div>
                   <Btn small variant="ghost" style={{ color:COLORS.red, borderColor:COLORS.red }} onClick={() => deleteItem(item.id)}>Delete</Btn>
                 </div>
