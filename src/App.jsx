@@ -862,6 +862,8 @@ const Notif = ({ notifications }) => {
 // ============================================================
 function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, setDictionary }) {
   const [filter, setFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [grouped, setGrouped] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null); // recipe id being edited, or null for new
@@ -871,10 +873,27 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
   const allTags = useMemo(() => [...new Set([...Object.keys(settings.tagWeights || {}), ...recipes.flatMap(r => r.tags || [])])].sort(), [recipes, settings.tagWeights]);
 
   const filtered = recipes.filter(r => {
-    if (filter === "favorites") return r.stars >= 4;
-    if (filter === "quarantine") return r.quarantine;
+    if (filter === "favorites" && !(r.stars >= 4)) return false;
+    if (filter === "quarantine" && !r.quarantine) return false;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      const inName = r.name.toLowerCase().includes(q);
+      const inTags = (r.tags || []).some(t => t.toLowerCase().includes(q)) || (r.mealTags || []).some(t => t.toLowerCase().includes(q));
+      const inIngs = (r.ingredients || []).some(i => i.name.toLowerCase().includes(q));
+      if (!inName && !inTags && !inIngs) return false;
+    }
     return true;
   });
+
+  // Group filtered recipes by primary category (first tag), "Other" if untagged.
+  const groupedRecipes = (() => {
+    const groups = {};
+    for (const r of filtered) {
+      const key = (r.tags && r.tags[0]) || "Other";
+      (groups[key] = groups[key] || []).push(r);
+    }
+    return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
+  })();
 
   const freqNotifs = recipes.filter(r => {
     if (r.shelvedUntil && r.shelvedUntil > Date.now()) return false;
@@ -979,13 +998,23 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
     <div>
       <Notif notifications={[...quarNotifs, ...freqNotifs]} />
       {recipes.length > 0 && (
-        <div style={{ display:"flex", gap:6, marginBottom:14, flexWrap:"wrap" }}>
-          {["all","favorites","quarantine"].map(f => (
-            <Btn key={f} small variant={filter===f?"primary":"ghost"} onClick={() => setFilter(f)}>
-              {f==="all"?"All ("+recipes.length+")":f==="favorites"?"★ Favorites":"🔴 Quarantined ("+recipes.filter(r=>r.quarantine).length+")"}
-            </Btn>
-          ))}
-        </div>
+        <>
+          <div style={{ display:"flex", gap:6, marginBottom:8, flexWrap:"wrap" }}>
+            {["all","favorites","quarantine"].map(f => (
+              <Btn key={f} small variant={filter===f?"primary":"ghost"} onClick={() => setFilter(f)}>
+                {f==="all"?"All ("+recipes.length+")":f==="favorites"?"★ Favorites":"🔴 Quarantined ("+recipes.filter(r=>r.quarantine).length+")"}
+              </Btn>
+            ))}
+          </div>
+          <div style={{ display:"flex", gap:8, marginBottom:14, alignItems:"center" }}>
+            <div style={{ flex:1, position:"relative" }}>
+              <span style={{ position:"absolute", left:10, top:"50%", transform:"translateY(-50%)", fontSize:13, color:COLORS.textSec, pointerEvents:"none" }}>🔍</span>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search recipes, tags, ingredients..." style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px 8px 30px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
+              {search && <span onClick={() => setSearch("")} style={{ position:"absolute", right:10, top:"50%", transform:"translateY(-50%)", fontSize:15, color:COLORS.textSec, cursor:"pointer" }}>×</span>}
+            </div>
+            <Btn small variant={grouped?"primary":"ghost"} onClick={() => setGrouped(g => !g)} title="Group by category">⊞ Group</Btn>
+          </div>
+        </>
       )}
       {recipes.length === 0 && !showAdd && (
         <div style={{ textAlign:"center", padding:"32px 20px 24px" }}>
@@ -997,8 +1026,8 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
           <Btn onClick={() => setShowAdd(true)} style={{ width:"100%" }}>+ Add a recipe</Btn>
         </div>
       )}
-      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-        {filtered.map(r => (
+      {(() => {
+        const renderCard = (r) => (
           <Card key={r.id} onClick={() => setExpandedId(expandedId===r.id?null:r.id)}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
               <div style={{ flex:1, minWidth:0 }}>
@@ -1094,8 +1123,26 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
               </div>
             )}
           </Card>
-        ))}
-      </div>
+        );
+        if (filtered.length === 0 && recipes.length > 0) {
+          return <div style={{ textAlign:"center", padding:"24px 20px", fontSize:13, color:COLORS.textSec }}>No recipes match{search ? ` "${search}"` : ""}.</div>;
+        }
+        if (grouped) {
+          return (
+            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+              {groupedRecipes.map(([cat, rs]) => (
+                <div key={cat}>
+                  <div style={{ fontSize:11, fontWeight:700, color:COLORS.primary, textTransform:"uppercase", letterSpacing:0.8, marginBottom:6 }}>{cat} ({rs.length})</div>
+                  <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                    {rs.map(renderCard)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        }
+        return <div style={{ display:"flex", flexDirection:"column", gap:8 }}>{filtered.map(renderCard)}</div>;
+      })()}
       <div style={{ marginTop:16 }}>
         {!showAdd ? (
           recipes.length > 0 && <Btn onClick={() => setShowAdd(true)} style={{ width:"100%" }}>+ Add Recipe</Btn>
