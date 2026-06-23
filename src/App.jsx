@@ -745,6 +745,48 @@ const Card = ({ children, style, onClick }) => (
   <div onClick={onClick} style={{ background:COLORS.surface, borderRadius:10, padding:"12px 14px", border:`1px solid ${COLORS.border}`, cursor:onClick?"pointer":"default", ...style }}>{children}</div>
 );
 
+// Number input that lets the field go blank while editing (so you can clear it
+// and type fresh) and only resolves to a number on blur. Commits valid numbers
+// live; on blur, an empty/invalid field falls back to `fallback` (default min).
+// Props: value, onCommit(num), min, max, step, and any style/extra passthrough.
+function NumberInput({ value, onCommit, min = -Infinity, max = Infinity, step, fallback, style, ...rest }) {
+  const [draft, setDraft] = useState(String(value ?? ""));
+  const focused = useRef(false);
+  // Keep draft in sync when the external value changes and we're not editing.
+  useEffect(() => { if (!focused.current) setDraft(String(value ?? "")); }, [value]);
+
+  const clamp = (n) => Math.max(min, Math.min(max, n));
+
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      step={step}
+      value={draft}
+      onFocus={() => { focused.current = true; }}
+      onChange={e => {
+        const v = e.target.value;
+        setDraft(v);
+        if (v !== "" && v !== "-" && !isNaN(+v)) onCommit(clamp(+v));
+      }}
+      onBlur={() => {
+        focused.current = false;
+        if (draft === "" || isNaN(+draft)) {
+          const fb = fallback != null ? fallback : (min === -Infinity ? 0 : min);
+          onCommit(fb);
+          setDraft(String(fb));
+        } else {
+          const c = clamp(+draft);
+          onCommit(c);
+          setDraft(String(c));
+        }
+      }}
+      style={style}
+      {...rest}
+    />
+  );
+}
+
 const Btn = ({ children, variant="primary", style, onClick, small, disabled }) => {
   const s = {
     primary: { background:COLORS.primary, color:"#fff", border:"none" },
@@ -987,14 +1029,14 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
                   <div>
                     <div style={{ fontSize:10, color:COLORS.textSec, fontWeight:600 }}>Slot range</div>
                     <div style={{ display:"flex", alignItems:"center", gap:4, marginTop:2 }}>
-                      <input type="number" value={r.slotsMin} onChange={e => updateRecipe(r.id, { slotsMin: Math.max(1, +e.target.value) })} style={{ width:36, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
+                      <NumberInput value={r.slotsMin} onCommit={v => updateRecipe(r.id, { slotsMin: v })} min={1} fallback={1} style={{ width:36, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
                       <span style={{ color:COLORS.textSec }}>–</span>
-                      <input type="number" value={r.slotsMax} onChange={e => updateRecipe(r.id, { slotsMax: Math.max(r.slotsMin, +e.target.value) })} style={{ width:36, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
+                      <NumberInput value={r.slotsMax} onCommit={v => updateRecipe(r.id, { slotsMax: Math.max(r.slotsMin, v) })} min={1} fallback={r.slotsMin} style={{ width:36, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
                     </div>
                   </div>
                   <div>
                     <div style={{ fontSize:10, color:COLORS.textSec, fontWeight:600 }}>Servings</div>
-                    <input type="number" value={r.servings} onChange={e => updateRecipe(r.id, { servings: Math.max(1, +e.target.value) })} style={{ width:50, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center", marginTop:2 }} />
+                    <NumberInput value={r.servings} onCommit={v => updateRecipe(r.id, { servings: v })} min={1} fallback={1} style={{ width:50, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center", marginTop:2 }} />
                   </div>
                 </div>
                 {(r.tags || []).length > 0 && (
@@ -1079,14 +1121,14 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
               <div style={{ display:"flex", gap:8 }}>
                 <div style={{ flex:1 }}>
                   <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Servings</div>
-                  <input type="number" value={addForm.servings} onChange={e => setAddForm(p => ({ ...p, servings: +e.target.value }))} style={{ width:"100%", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14, boxSizing:"border-box" }} />
+                  <NumberInput value={addForm.servings} onCommit={v => setAddForm(p => ({ ...p, servings: v }))} min={1} fallback={1} style={{ width:"100%", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14, boxSizing:"border-box" }} />
                 </div>
                 <div style={{ flex:1 }}>
                   <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Slot range</div>
                   <div style={{ display:"flex", alignItems:"center", gap:4 }}>
-                    <input type="number" value={addForm.slotsMin} onChange={e => setAddForm(p => ({ ...p, slotsMin: +e.target.value }))} style={{ width:"100%", padding:"8px 6px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14, boxSizing:"border-box", textAlign:"center" }} />
+                    <NumberInput value={addForm.slotsMin} onCommit={v => setAddForm(p => ({ ...p, slotsMin: v }))} min={1} fallback={1} style={{ width:"100%", padding:"8px 6px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14, boxSizing:"border-box", textAlign:"center" }} />
                     <span style={{ color:COLORS.textSec }}>–</span>
-                    <input type="number" value={addForm.slotsMax} onChange={e => setAddForm(p => ({ ...p, slotsMax: +e.target.value }))} style={{ width:"100%", padding:"8px 6px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14, boxSizing:"border-box", textAlign:"center" }} />
+                    <NumberInput value={addForm.slotsMax} onCommit={v => setAddForm(p => ({ ...p, slotsMax: v }))} min={1} fallback={1} style={{ width:"100%", padding:"8px 6px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14, boxSizing:"border-box", textAlign:"center" }} />
                   </div>
                 </div>
               </div>
@@ -2083,7 +2125,7 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
             <div style={{ display:"flex", gap:8 }}>
               <div style={{ flex:1 }}>
                 <div style={{ fontSize:10, color:COLORS.textSec, fontWeight:600, marginBottom:2 }}>Qty</div>
-                <input type="number" value={addForm.qty} onChange={e => setAddForm(p => ({ ...p, qty: +e.target.value }))} style={{ width:"100%", padding:"6px 8px", borderRadius:5, border:`1px solid ${COLORS.border}`, fontSize:13, boxSizing:"border-box" }} />
+                <NumberInput value={addForm.qty} onCommit={v => setAddForm(p => ({ ...p, qty: v }))} min={0} fallback={0} style={{ width:"100%", padding:"6px 8px", borderRadius:5, border:`1px solid ${COLORS.border}`, fontSize:13, boxSizing:"border-box" }} />
               </div>
               <div style={{ flex:1 }}>
                 <div style={{ fontSize:10, color:COLORS.textSec, fontWeight:600, marginBottom:2 }}>Unit</div>
@@ -2091,7 +2133,7 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
               </div>
               <div style={{ flex:1 }}>
                 <div style={{ fontSize:10, color:COLORS.textSec, fontWeight:600, marginBottom:2 }}>Floor</div>
-                <input type="number" value={addForm.floor} onChange={e => setAddForm(p => ({ ...p, floor: +e.target.value }))} style={{ width:"100%", padding:"6px 8px", borderRadius:5, border:`1px solid ${COLORS.border}`, fontSize:13, boxSizing:"border-box" }} />
+                <NumberInput value={addForm.floor} onCommit={v => setAddForm(p => ({ ...p, floor: v }))} min={0} fallback={0} style={{ width:"100%", padding:"6px 8px", borderRadius:5, border:`1px solid ${COLORS.border}`, fontSize:13, boxSizing:"border-box" }} />
               </div>
             </div>
             <div style={{ display:"flex", gap:8 }}>
@@ -2143,11 +2185,11 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
                 <div style={{ padding:"10px 12px", background:below?COLORS.quarantineBg:COLORS.surface, border:`1px solid ${below?`${COLORS.quarantine}30`:COLORS.border}`, borderTop:`1px dashed ${COLORS.border}`, borderRadius:"0 0 8px 8px", display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap" }} onClick={e => e.stopPropagation()}>
                   <div>
                     <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Qty</div>
-                    <input type="number" value={item.qty} onChange={e => updateItem(item.id, { qty: Math.max(0, +e.target.value) })} style={{ width:56, padding:"5px 6px", borderRadius:5, border:`1.5px solid ${COLORS.border}`, fontSize:14, textAlign:"center", fontWeight:600 }} />
+                    <NumberInput value={item.qty} onCommit={v => updateItem(item.id, { qty: v })} min={0} fallback={0} style={{ width:56, padding:"5px 6px", borderRadius:5, border:`1.5px solid ${COLORS.border}`, fontSize:14, textAlign:"center", fontWeight:600 }} />
                   </div>
                   <div>
                     <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Floor</div>
-                    <input type="number" value={item.floor} onChange={e => updateItem(item.id, { floor: Math.max(0, +e.target.value) })} style={{ width:56, padding:"5px 6px", borderRadius:5, border:`1.5px solid ${below?COLORS.quarantine:COLORS.border}`, fontSize:14, textAlign:"center", fontWeight:600 }} />
+                    <NumberInput value={item.floor} onCommit={v => updateItem(item.id, { floor: v })} min={0} fallback={0} style={{ width:56, padding:"5px 6px", borderRadius:5, border:`1.5px solid ${below?COLORS.quarantine:COLORS.border}`, fontSize:14, textAlign:"center", fontWeight:600 }} />
                   </div>
                   <div>
                     <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Store</div>
@@ -2297,7 +2339,7 @@ function PeopleSection({ people, setPeople }) {
                   <select value={p.profile} onChange={e => { const npt = PROFILE_TYPES.find(x => x.key === e.target.value); updatePerson(p.id, { profile: npt.key, weight: npt.weight }); }} style={{ fontSize:12, padding:"4px 6px", borderRadius:5, border:`1px solid ${COLORS.border}`, background:"#fff" }}>
                     {PROFILE_TYPES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
                   </select>
-                  <input type="number" step="0.05" value={p.weight} onChange={e => updatePerson(p.id, { weight: Math.max(0, +e.target.value) })} style={{ width:54, fontSize:12, padding:"4px 6px", borderRadius:5, border:`1px solid ${COLORS.border}`, textAlign:"center" }} title="portion weight" />
+                  <NumberInput value={p.weight} onCommit={v => updatePerson(p.id, { weight: v })} min={0} step="0.05" fallback={0} style={{ width:54, fontSize:12, padding:"4px 6px", borderRadius:5, border:`1px solid ${COLORS.border}`, textAlign:"center" }} title="portion weight" />
                   <select value={att.key} onChange={e => { const na = ATTENDANCE.find(x => x.key === e.target.value); updatePerson(p.id, { attendance: na.factor }); }} style={{ fontSize:12, padding:"4px 6px", borderRadius:5, border:`1px solid ${COLORS.border}`, background:"#fff" }}>
                     {ATTENDANCE.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}
                   </select>
@@ -2430,7 +2472,7 @@ function CalibrationSection({ settings, update }) {
           {entries.map(([tag, w]) => (
             <div key={tag} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
               <span style={{ fontSize:12, flex:1 }}>{tag}</span>
-              <input type="number" value={w} onChange={e => setTag(tag, +e.target.value)} style={{ width:54, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:12, textAlign:"center" }} />
+              <NumberInput value={w} onCommit={v => setTag(tag, v)} min={0} max={100} fallback={50} style={{ width:54, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:12, textAlign:"center" }} />
             </div>
           ))}
           <div style={{ fontSize:11, fontWeight:700, margin:"10px 0 4px" }}>Meal target bands (score min–max)</div>
@@ -2439,9 +2481,9 @@ function CalibrationSection({ settings, update }) {
             return (
               <div key={m} style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
                 <span style={{ fontSize:12, minWidth:70 }}>{m}</span>
-                <input type="number" value={t.min} onChange={e => update("mealTargets", { ...targets, [m]: { ...t, min:+e.target.value } })} style={{ width:50, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:12, textAlign:"center" }} />
+                <NumberInput value={t.min} onCommit={v => update("mealTargets", { ...targets, [m]: { ...t, min:v } })} min={0} fallback={0} style={{ width:50, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:12, textAlign:"center" }} />
                 <span style={{ color:COLORS.textSec }}>–</span>
-                <input type="number" value={t.max} onChange={e => update("mealTargets", { ...targets, [m]: { ...t, max:+e.target.value } })} style={{ width:50, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:12, textAlign:"center" }} />
+                <NumberInput value={t.max} onCommit={v => update("mealTargets", { ...targets, [m]: { ...t, max:v } })} min={0} fallback={0} style={{ width:50, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:12, textAlign:"center" }} />
               </div>
             );
           })}
@@ -2460,9 +2502,9 @@ function RangesSection({ ranges, onChange, tagWeights }) {
       {ranges.map((r, i) => (
         <div key={i} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8, padding:"10px 12px", borderRadius:8, background:COLORS.surface }}>
           <span style={{ fontSize:13, fontWeight:600, minWidth:70 }}>{r.tag}</span>
-          <input type="number" value={r.min} onChange={e => { const nr = [...ranges]; nr[i] = { ...r, min: +e.target.value }; onChange(nr); }} style={{ width:40, padding:"4px 6px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
+          <NumberInput value={r.min} onCommit={v => { const nr = [...ranges]; nr[i] = { ...r, min: v }; onChange(nr); }} min={0} fallback={0} style={{ width:40, padding:"4px 6px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
           <span style={{ color:COLORS.textSec }}>–</span>
-          <input type="number" value={r.max} onChange={e => { const nr = [...ranges]; nr[i] = { ...r, max: +e.target.value }; onChange(nr); }} style={{ width:40, padding:"4px 6px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
+          <NumberInput value={r.max} onCommit={v => { const nr = [...ranges]; nr[i] = { ...r, max: v }; onChange(nr); }} min={0} fallback={0} style={{ width:40, padding:"4px 6px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
           <span style={{ fontSize:13, cursor:"pointer", color:COLORS.red }} onClick={() => onChange(ranges.filter((_, j) => j !== i))}>×</span>
         </div>
       ))}
@@ -2553,7 +2595,7 @@ function ExcludesSection({ excludes, onChange, people }) {
           </label>
           {!permanent && (
             <span style={{ display:"flex", alignItems:"center", gap:4 }}>
-              <input type="number" value={newDays} onChange={e => setNewDays(+e.target.value)} style={{ width:50, padding:"5px 6px", borderRadius:5, border:`1px solid ${COLORS.border}`, fontSize:12, textAlign:"center" }} />
+              <NumberInput value={newDays} onCommit={setNewDays} min={1} fallback={14} style={{ width:50, padding:"5px 6px", borderRadius:5, border:`1px solid ${COLORS.border}`, fontSize:12, textAlign:"center" }} />
               <span style={{ fontSize:11, color:COLORS.textSec }}>days</span>
             </span>
           )}
@@ -2574,14 +2616,14 @@ function BoostsSection({ boosts, onChange }) {
         <div key={i} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8, padding:"10px 12px", borderRadius:8, background:COLORS.boostBg }}>
           <span style={{ fontSize:14 }}>⬆</span>
           <span style={{ flex:1, fontSize:13, fontWeight:600, color:COLORS.boost }}>{b.item}</span>
-          <input type="number" value={b.weight} onChange={e => { const nb = [...boosts]; nb[i] = { ...b, weight: +e.target.value }; onChange(nb); }} style={{ width:44, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.boost}40`, fontSize:12, textAlign:"center" }} />
+          <NumberInput value={b.weight} onCommit={v => { const nb = [...boosts]; nb[i] = { ...b, weight: v }; onChange(nb); }} min={0} fallback={10} style={{ width:44, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.boost}40`, fontSize:12, textAlign:"center" }} />
           <span style={{ fontSize:10, color:COLORS.boost }}>%</span>
           <Btn small variant="ghost" style={{ fontSize:11, padding:"3px 8px", color:COLORS.boost, borderColor:COLORS.boost }} onClick={() => onChange(boosts.filter((_, j) => j !== i))}>×</Btn>
         </div>
       ))}
       <div style={{ display:"flex", gap:6, marginTop:10 }}>
         <input value={newItem} onChange={e => setNewItem(e.target.value)} placeholder="Tag or ingredient..." style={{ flex:1, padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
-        <input type="number" value={newWeight} onChange={e => setNewWeight(+e.target.value)} style={{ width:50, padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
+        <NumberInput value={newWeight} onCommit={setNewWeight} min={0} fallback={10} style={{ width:50, padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
         <Btn small onClick={() => { if (newItem.trim()) { onChange([...boosts, { item: normalize(newItem), weight: newWeight }]); setNewItem(""); } }}>Boost</Btn>
       </div>
     </div>
