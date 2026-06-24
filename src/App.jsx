@@ -851,6 +851,31 @@ const Combobox = ({ options, value, onChange, placeholder, multi, selected = [] 
   );
 };
 
+// Searchable add-field that suggests from a pool of known names as you type,
+// and also lets you add a brand-new value. Fires onPick(name) and clears.
+function IngredientSearch({ pool, onPick, placeholder = "Search ingredient...", style }) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const ref = useRef();
+  useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
+  const ql = q.toLowerCase().trim();
+  const matches = ql ? pool.filter(o => o.includes(ql)).slice(0, 8) : [];
+  const exact = pool.includes(ql);
+  const pick = (name) => { onPick(name); setQ(""); setOpen(false); };
+  return (
+    <div ref={ref} style={{ position:"relative", flex:1, ...style }}>
+      <input value={q} onChange={e => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)}
+        placeholder={placeholder} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
+      {open && ql && (
+        <div style={{ position:"absolute", top:"100%", left:0, right:0, maxHeight:180, overflowY:"auto", background:"#fff", border:`1px solid ${COLORS.border}`, borderRadius:6, marginTop:2, zIndex:20, boxShadow:"0 4px 12px rgba(0,0,0,0.1)" }}>
+          {matches.map(o => <div key={o} onClick={() => pick(o)} style={{ padding:"8px 10px", cursor:"pointer", fontSize:13 }}>{o}</div>)}
+          {!exact && <div onClick={() => pick(normalize(q))} style={{ padding:"8px 10px", cursor:"pointer", fontSize:13, color:COLORS.primary, fontWeight:600, borderTop:matches.length?`1px solid ${COLORS.border}`:"none" }}>+ Add "{ql}"</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const Notif = ({ notifications }) => {
   if (!notifications?.length) return null;
   return (
@@ -2431,7 +2456,16 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
 // ============================================================
 // SETTINGS TAB
 // ============================================================
-function SettingsTab({ settings, setSettings, people, setPeople }) {
+function SettingsTab({ settings, setSettings, people, setPeople, pantry, recipes, dictionary }) {
+  // Pool of known ingredient names for searchable exclusion/boost fields —
+  // drawn from pantry, all recipe ingredients, and the learned dictionary.
+  const ingredientPool = useMemo(() => {
+    const s = new Set();
+    (pantry || []).forEach(p => s.add(normalize(p.name)));
+    (recipes || []).forEach(r => (r.ingredients || []).forEach(i => s.add(normalize(i.name))));
+    (dictionary || []).forEach(d => s.add(normalize(d)));
+    return [...s].filter(Boolean).sort();
+  }, [pantry, recipes, dictionary]);
   const [section, setSection] = useState("people");
   const update = (key, val) => setSettings(prev => ({ ...prev, [key]: val }));
 
@@ -2446,9 +2480,9 @@ function SettingsTab({ settings, setSettings, people, setPeople }) {
       {section === "people" && <PeopleSection people={people} setPeople={setPeople} />}
       {section === "preferences" && <CalibrationSection settings={settings} update={update} />}
       {section === "ranges" && <RangesSection ranges={settings.ranges} onChange={v => update("ranges", v)} tagWeights={settings.tagWeights} />}
-      {section === "redlist" && <RedListSection redList={settings.redList} onChange={v => update("redList", v)} />}
-      {section === "excludes" && <ExcludesSection excludes={settings.excludes} onChange={v => update("excludes", v)} people={people} />}
-      {section === "boosts" && <BoostsSection boosts={settings.boosts} onChange={v => update("boosts", v)} />}
+      {section === "redlist" && <RedListSection redList={settings.redList} onChange={v => update("redList", v)} ingredientPool={ingredientPool} />}
+      {section === "excludes" && <ExcludesSection excludes={settings.excludes} onChange={v => update("excludes", v)} people={people} ingredientPool={ingredientPool} />}
+      {section === "boosts" && <BoostsSection boosts={settings.boosts} onChange={v => update("boosts", v)} ingredientPool={ingredientPool} />}
       {section === "cooking" && <CookingSection settings={settings} update={update} />}
       {section === "data" && <DataSection />}
     </div>
@@ -2675,8 +2709,7 @@ function RangesSection({ ranges, onChange, tagWeights }) {
   );
 }
 
-function RedListSection({ redList, onChange }) {
-  const [newItem, setNewItem] = useState("");
+function RedListSection({ redList, onChange, ingredientPool = [] }) {
   return (
     <div>
       <div style={{ fontSize:12, color:COLORS.textSec, marginBottom:10 }}>Recipes with these are quarantined until substituted</div>
@@ -2688,14 +2721,13 @@ function RedListSection({ redList, onChange }) {
         </div>
       ))}
       <div style={{ display:"flex", gap:6, marginTop:10 }}>
-        <input value={newItem} onChange={e => setNewItem(e.target.value)} placeholder="Add to red list..." style={{ flex:1, padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
-        <Btn small variant="danger" onClick={() => { if (newItem.trim()) { onChange([...redList, normalize(newItem)]); setNewItem(""); } }}>Add</Btn>
+        <IngredientSearch pool={ingredientPool} placeholder="Search ingredient to red-list..." onPick={(name) => { if (!redList.includes(name)) onChange([...redList, name]); }} />
       </div>
     </div>
   );
 }
 
-function ExcludesSection({ excludes, onChange, people }) {
+function ExcludesSection({ excludes, onChange, people, ingredientPool = [] }) {
   const [newIng, setNewIng] = useState("");
   const [newScope, setNewScope] = useState("all");
   const [permanent, setPermanent] = useState(true);
@@ -2742,7 +2774,14 @@ function ExcludesSection({ excludes, onChange, people }) {
         );
       })}
       <div style={{ display:"flex", flexDirection:"column", gap:6, marginTop:10, padding:"10px 12px", borderRadius:8, background:COLORS.surface }}>
-        <input value={newIng} onChange={e => setNewIng(e.target.value)} placeholder="Ingredient..." style={{ padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
+        {newIng ? (
+          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+            <span style={{ flex:1, fontSize:13, fontWeight:600, padding:"6px 10px", background:`${COLORS.primary}12`, borderRadius:6 }}>{newIng}</span>
+            <Btn small variant="ghost" onClick={() => setNewIng("")}>change</Btn>
+          </div>
+        ) : (
+          <IngredientSearch pool={ingredientPool} placeholder="Search ingredient to exclude..." onPick={setNewIng} />
+        )}
         <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
           <span style={{ fontSize:11, color:COLORS.textSec, fontWeight:600 }}>For:</span>
           <select value={newScope} onChange={e => setNewScope(e.target.value)} style={{ fontSize:12, padding:"5px 8px", borderRadius:5, border:`1px solid ${COLORS.border}`, background:"#fff" }}>
@@ -2765,8 +2804,7 @@ function ExcludesSection({ excludes, onChange, people }) {
   );
 }
 
-function BoostsSection({ boosts, onChange }) {
-  const [newItem, setNewItem] = useState("");
+function BoostsSection({ boosts, onChange, ingredientPool = [] }) {
   const [newWeight, setNewWeight] = useState(15);
   return (
     <div>
@@ -2780,11 +2818,11 @@ function BoostsSection({ boosts, onChange }) {
           <Btn small variant="ghost" style={{ fontSize:11, padding:"3px 8px", color:COLORS.boost, borderColor:COLORS.boost }} onClick={() => onChange(boosts.filter((_, j) => j !== i))}>×</Btn>
         </div>
       ))}
-      <div style={{ display:"flex", gap:6, marginTop:10 }}>
-        <input value={newItem} onChange={e => setNewItem(e.target.value)} placeholder="Tag or ingredient..." style={{ flex:1, padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
+      <div style={{ display:"flex", gap:6, marginTop:10, alignItems:"flex-start" }}>
+        <IngredientSearch pool={ingredientPool} placeholder="Tag or ingredient..." onPick={(name) => { if (!boosts.some(b => b.item === name)) onChange([...boosts, { item: name, weight: newWeight }]); }} />
         <NumberInput value={newWeight} onCommit={setNewWeight} min={0} fallback={10} style={{ width:50, padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
-        <Btn small onClick={() => { if (newItem.trim()) { onChange([...boosts, { item: normalize(newItem), weight: newWeight }]); setNewItem(""); } }}>Boost</Btn>
       </div>
+      <div style={{ fontSize:10, color:COLORS.textSec, marginTop:4 }}>Set the % first, then pick an ingredient to boost it.</div>
     </div>
   );
 }
@@ -2947,7 +2985,7 @@ export default function App() {
         {tab === "Plan" && <PlanTab recipes={recipes} setRecipes={setRecipes} plan={plan} setPlan={setPlan} settings={settings} pantry={pantry} setPantry={setPantry} people={people} spices={spices} setSpices={setSpices} setTab={setTab} />}
         {tab === "Shop" && <ShopTab plan={plan} recipes={recipes} setRecipes={setRecipes} pantry={pantry} setPantry={setPantry} spices={spices} setSpices={setSpices} settings={settings} people={people} setTab={setTab} />}
         {tab === "Pantry" && <PantryTab pantry={pantry} setPantry={setPantry} spices={spices} setSpices={setSpices} />}
-        {tab === "Settings" && <SettingsTab settings={settings} setSettings={setSettings} people={people} setPeople={setPeople} />}
+        {tab === "Settings" && <SettingsTab settings={settings} setSettings={setSettings} people={people} setPeople={setPeople} pantry={pantry} recipes={recipes} dictionary={dictionary} />}
       </div>
       <div style={{ position:"fixed", bottom:0, left:0, right:0, display:"flex", justifyContent:"space-around", padding:"8px 0 max(12px, env(safe-area-inset-bottom))", background:COLORS.bg, borderTop:`1px solid ${COLORS.border}`, zIndex:20 }}>
         {TABS.map(t => (
