@@ -93,6 +93,24 @@ function uid() { return Date.now().toString(36) + Math.random().toString(36).sli
 // Heal arrays with duplicate or missing ids: the first occurrence of an id is
 // kept; any later collision gets a fresh id (data preserved, not dropped). A
 // duplicate id is what crashes React's keyed render — this prevents that.
+// Backfill any missing settings keys from defaults, so loaded settings saved by
+// an older app version (missing redList/excludes/boosts/ranges/mealComposition/
+// etc.) can never expose undefined to render-time `.some`/`.map`/`.length`
+// calls — the cause of "click a recipe → white page" on certain data.
+function mergeSettings(loaded) {
+  const s = { ...DEFAULT_SETTINGS, ...(loaded || {}) };
+  // Ensure array/object fields specifically (a present-but-null value would
+  // still break, so coerce each).
+  if (!Array.isArray(s.ranges)) s.ranges = [];
+  if (!Array.isArray(s.redList)) s.redList = [];
+  if (!Array.isArray(s.excludes)) s.excludes = [];
+  if (!Array.isArray(s.boosts)) s.boosts = [];
+  if (!s.tagWeights || typeof s.tagWeights !== "object") s.tagWeights = { ...DEFAULT_SETTINGS.tagWeights };
+  if (!s.mealTargets || typeof s.mealTargets !== "object") s.mealTargets = { ...DEFAULT_SETTINGS.mealTargets };
+  if (!s.mealComposition || typeof s.mealComposition !== "object") s.mealComposition = { ...DEFAULT_SETTINGS.mealComposition };
+  return s;
+}
+
 function dedupeById(arr) {
   if (!Array.isArray(arr)) return [];
   const seen = new Set();
@@ -176,6 +194,7 @@ function qualifyRecipe(recipe, excludes, activePersonIds, now = Date.now(), maxO
 }
 
 function normalize(s) {
+  if (typeof s !== "string") s = s == null ? "" : String(s);
   let w = s.toLowerCase().trim().replace(/-/g, " ").replace(/\s+/g, " ");
   if (!w) return w;
   if (NORM_KEEP.has(w)) return w;
@@ -3368,7 +3387,7 @@ export default function App() {
   const [recipes, setRecipesRaw] = useState(() => dedupeById(load("recipes", [])));
   const [pantry, setPantryRaw] = useState(() => dedupeById(load("pantry", [])));
   const [plan, setPlanRaw] = useState(() => load("plan", emptyPlan()));
-  const [settings, setSettingsRaw] = useState(() => load("settings", DEFAULT_SETTINGS));
+  const [settings, setSettingsRaw] = useState(() => mergeSettings(load("settings", DEFAULT_SETTINGS)));
   const [dictionary, setDictionaryRaw] = useState(() => load("dictionary", []));
   const [people, setPeopleRaw] = useState(() => load("people", []));
   const [seenSurvey, setSeenSurvey] = useState(() => load("seenSurvey", false));
@@ -3399,11 +3418,13 @@ export default function App() {
     setSpicesRaw(prev => { const next = typeof v === "function" ? v(prev) : v; save("spices", next); return next; });
   }, []);
 
-  // On mount, persist the deduped recipes/pantry so any healed duplicate ids
-  // are written back (the initial useState dedupe is in memory only otherwise).
+  // On mount, persist the deduped recipes/pantry and merged settings so any
+  // healed duplicate ids / backfilled settings keys are written back (the
+  // initial useState fixups are in memory only otherwise).
   useEffect(() => {
     save("recipes", recipes);
     save("pantry", pantry);
+    save("settings", settings);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
