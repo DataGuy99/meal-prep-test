@@ -526,6 +526,44 @@ function prettyUnit(family, baseQty) {
 
 function round1(n) { return Math.round(n * 10) / 10; }
 
+// Strip a leading quantity/measure from an ingredient name for *display* in the
+// shopping list, so "2 eggs" shows as "eggs" (the total is shown separately on
+// the right). Only removes a leading number (+ optional unit word); keeps the
+// descriptive remainder intact.
+const DISPLAY_UNIT_WORDS = "g|kg|oz|lb|lbs|ml|l|cup|cups|tbsp|tsp|can|cans|bottle|bottles|bag|bags|head|heads|pc|pcs|piece|pieces|bunch|bunches|clove|cloves|stalk|stalks|block|blocks|fillet|fillets|slice|slices|pinch|dash";
+function stripLeadingQty(name) {
+  if (!name) return name;
+  const cleaned = name
+    .replace(new RegExp(`^\\s*[\\d.\\/]+\\s*(?:${DISPLAY_UNIT_WORDS})?\\s+`, "i"), "")
+    .trim();
+  return cleaned || name; // never blank out the whole name
+}
+
+// Conservative noise words to strip when forming the *merge key*, so trivially
+// different phrasings of the SAME ingredient collapse — without merging
+// genuinely different items. Only quantity/garnish filler is removed; all
+// distinguishing words (black, white, ground, fresh, smoked, ...) are kept.
+const MERGE_NOISE = [
+  "to taste", "for taste", "or to taste", "or more to taste",
+  "a pinch of", "a pinch", "pinch of", "pinch",
+  "a dash of", "a dash", "dash of", "dash",
+  "a sprinkle of", "a sprinkle", "sprinkle of", "sprinkle",
+  "for garnish", "to garnish", "as garnish", "garnish",
+  "as needed", "if needed", "optional", "or as needed",
+  "a little", "some", "a bit of", "a handful of", "handful of",
+];
+function mergeKey(name) {
+  let k = normalize(name);
+  for (const noise of MERGE_NOISE) {
+    k = k.replace(new RegExp(`(^|[,\\s])${noise.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([,\\s]|$)`, "gi"), " ");
+  }
+  k = k.replace(/[,\s]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!k) return normalize(name);
+  // Re-normalize each remaining word so a trailing plural exposed by noise
+  // removal ("...peppers, to taste" -> "...peppers" -> "...pepper") collapses.
+  return k.split(" ").map(w => normalize(w)).join(" ");
+}
+
 function generateShoppingList(plan, recipes, pantry, excludes = [], activePersonIds = null, maxOmissions = Infinity) {
   // Bucket needs by ingredient name + unit family. Within a family, sum in base units.
   // needs[name] = { name, category, families: { [family]: baseQty } }
@@ -543,8 +581,8 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
     const omittedSet = new Set(qual.omitted.map(n => normalize(n)));
     for (const ing of (recipe.ingredients || [])) {
       if (omittedSet.has(normalize(ing.name))) continue;
-      const key = normalize(ing.name);
-      if (!needs[key]) needs[key] = { name: ing.name, category: guessCategory(ing.name), families: {} };
+      const key = mergeKey(ing.name);
+      if (!needs[key]) needs[key] = { name: stripLeadingQty(ing.name), category: guessCategory(ing.name), families: {} };
       const info = unitInfo(ing.unit);
       const base = (ing.qty || 1) * info.factor;
       needs[key].families[info.family] = (needs[key].families[info.family] || 0) + base;
@@ -553,7 +591,7 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
 
   const items = [];
   for (const [key, need] of Object.entries(needs)) {
-    const pantryItem = pantry.find(p => normalize(p.name) === key);
+    const pantryItem = pantry.find(p => mergeKey(p.name) === key);
 
     for (const [family, baseQty] of Object.entries(need.families)) {
       let remaining = baseQty;
@@ -586,7 +624,7 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
 function getFloorItems(pantry) {
   const itemStores = (p) => p.stores && p.stores.length ? p.stores : (p.store ? [p.store] : []);
   return pantry.filter(p => p.floor > 0 && p.qty <= p.floor).map(p => ({
-    name: p.name, qty: round1(p.floor - p.qty), unit: p.unit,
+    name: stripLeadingQty(p.name), qty: round1(p.floor - p.qty), unit: p.unit,
     category: guessCategory(p.name), store: itemStores(p).join(", "),
     reason: `${p.qty < p.floor ? "Below" : "At"} floor (${p.qty}/${p.floor})`,
     checked: false, source: "floor",
@@ -606,7 +644,7 @@ function buildUnifiedList(plan, recipes, pantry, excludes = [], activePersonIds 
 
   // Key each by name|family. For floor items, derive their family from unit.
   const merged = {}; // key -> item with baseQty for comparison
-  const keyOf = (name, unit) => `${normalize(name)}|${unitInfo(unit).family}`;
+  const keyOf = (name, unit) => `${mergeKey(name)}|${unitInfo(unit).family}`;
 
   function consider(item, reason) {
     const k = keyOf(item.name, item.unit);
