@@ -2539,13 +2539,14 @@ function SettingsTab({ settings, setSettings, people, setPeople, pantry, recipes
   return (
     <div>
       <div style={{ display:"flex", gap:4, marginBottom:14, flexWrap:"wrap" }}>
-        {[["people","People"],["preferences","Preferences"],["ranges","Ranges"],["redlist","Red List"],["excludes","Excludes"],["boosts","Boosts"],["cooking","Cooking"],["data","Data"]].map(([k, l]) => (
+        {[["people","People"],["preferences","Preferences"],["meals","Meals"],["ranges","Ranges"],["redlist","Red List"],["excludes","Excludes"],["boosts","Boosts"],["cooking","Cooking"],["data","Data"]].map(([k, l]) => (
           <Btn key={k} small variant={section===k?"primary":"ghost"} onClick={() => setSection(k)}>{l}</Btn>
         ))}
       </div>
 
       {section === "people" && <PeopleSection people={people} setPeople={setPeople} />}
       {section === "preferences" && <CalibrationSection settings={settings} update={update} />}
+      {section === "meals" && <MealCompositionSection settings={settings} update={update} />}
       {section === "ranges" && <RangesSection ranges={settings.ranges} onChange={v => update("ranges", v)} tagWeights={settings.tagWeights} />}
       {section === "redlist" && <RedListSection redList={settings.redList} onChange={v => update("redList", v)} ingredientPool={ingredientPool} />}
       {section === "excludes" && <ExcludesSection excludes={settings.excludes} onChange={v => update("excludes", v)} people={people} ingredientPool={ingredientPool} />}
@@ -2670,6 +2671,44 @@ function heavinessToBand(h) {
 function bandToHeaviness(band) {
   if (!band) return 50;
   return Math.round((band.min + band.max) / 2);
+}
+
+// Per-meal mains/sides counts. Sets how many main dishes and side dishes each
+// meal type can hold; the generator fills toward these and the Plan UI composes
+// within them.
+function MealCompositionSection({ settings, update }) {
+  const comp = settings.mealComposition || {};
+  const setField = (meal, field, val) => {
+    const cur = comp[meal] || { mainsMin:1, mainsMax:1, sidesMin:0, sidesMax:1 };
+    update("mealComposition", { ...comp, [meal]: { ...cur, [field]: Math.max(0, Math.round(val)) } });
+  };
+  const Row = ({ meal, label, kind }) => {
+    const c = comp[meal] || { mainsMin:1, mainsMax:1, sidesMin:0, sidesMax:1 };
+    const minKey = kind === "mains" ? "mainsMin" : "sidesMin";
+    const maxKey = kind === "mains" ? "mainsMax" : "sidesMax";
+    return (
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+        <span style={{ fontSize:12, minWidth:54, color:COLORS.textSec }}>{label}</span>
+        <NumberInput value={c[minKey]} onCommit={v => setField(meal, minKey, Math.min(v, c[maxKey]))} min={0} fallback={0} style={{ width:46, padding:"4px 6px", borderRadius:5, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
+        <span style={{ color:COLORS.textSec, fontSize:12 }}>to</span>
+        <NumberInput value={c[maxKey]} onCommit={v => setField(meal, maxKey, Math.max(v, c[minKey]))} min={0} fallback={0} style={{ width:46, padding:"4px 6px", borderRadius:5, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center" }} />
+      </div>
+    );
+  };
+  return (
+    <div>
+      <div style={{ fontSize:12, color:COLORS.textSec, marginBottom:14, lineHeight:1.45 }}>
+        How many main dishes and sides each meal can hold. For example, dinner with 1–2 mains and 0–2 sides means it'll have at least one main and can add a second, plus up to two sides like a soup or salad.
+      </div>
+      {MEALS.map(meal => (
+        <div key={meal} style={{ marginBottom:16, padding:"12px 14px", borderRadius:10, background:COLORS.surface }}>
+          <div style={{ fontSize:14, fontWeight:700, color:MC[meal]?.fg || COLORS.text, marginBottom:8 }}>{meal}</div>
+          <Row meal={meal} label="Mains" kind="mains" />
+          <Row meal={meal} label="Sides" kind="sides" />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function CalibrationSection({ settings, update }) {
@@ -2936,6 +2975,13 @@ const DEFAULT_SETTINGS = {
   tagWeights: Object.fromEntries(STARTER_TAGS.map(t => [t, 50])),
   // Neutral heaviness (center 70 ± 20) for every meal — no built-in bias.
   mealTargets: { Breakfast:{ min:50, max:90 }, Lunch:{ min:50, max:90 }, Dinner:{ min:50, max:90 } },
+  // How many mains and sides each meal type can hold. The generator fills up to
+  // these counts; the Plan UI lets you compose within them.
+  mealComposition: {
+    Breakfast: { mainsMin:1, mainsMax:1, sidesMin:0, sidesMax:1 },
+    Lunch:     { mainsMin:1, mainsMax:2, sidesMin:0, sidesMax:2 },
+    Dinner:    { mainsMin:1, mainsMax:2, sidesMin:0, sidesMax:2 },
+  },
   ranges: [],
   redList: [],
   excludes: [],
