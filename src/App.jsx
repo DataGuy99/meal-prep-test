@@ -608,21 +608,22 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
   const now = Date.now();
   DAYS.forEach(d => MEALS.forEach(m => {
     const slot = plan?.[d]?.[m];
-    if (!slot?.recipeId) return;
-    const recipe = recipes.find(r => r.id === slot.recipeId);
-    if (!recipe) return;
-    // Omission (M): ingredients dropped for the active household shouldn't be
-    // bought. A qualifying recipe's omitted secondary ingredients are excluded
-    // from the shopping list.
-    const qual = qualifyRecipe(recipe, excludes, activePersonIds, now, maxOmissions);
-    const omittedSet = new Set(qual.omitted.map(n => normalize(n)));
-    for (const ing of (recipe.ingredients || [])) {
-      if (omittedSet.has(normalize(ing.name))) continue;
-      const key = mergeKey(ing.name);
-      if (!needs[key]) needs[key] = { name: stripLeadingQty(ing.name), category: guessCategory(ing.name), families: {} };
-      const info = unitInfo(ing.unit);
-      const base = (ing.qty || 1) * info.factor;
-      needs[key].families[info.family] = (needs[key].families[info.family] || 0) + base;
+    for (const entry of slotEntries(slot)) {
+      const recipe = recipes.find(r => r.id === entry.recipeId);
+      if (!recipe) continue;
+      // Omission (M): ingredients dropped for the active household shouldn't be
+      // bought. A qualifying recipe's omitted secondary ingredients are excluded
+      // from the shopping list.
+      const qual = qualifyRecipe(recipe, excludes, activePersonIds, now, maxOmissions);
+      const omittedSet = new Set(qual.omitted.map(n => normalize(n)));
+      for (const ing of (recipe.ingredients || [])) {
+        if (omittedSet.has(normalize(ing.name))) continue;
+        const key = mergeKey(ing.name);
+        if (!needs[key]) needs[key] = { name: stripLeadingQty(ing.name), category: guessCategory(ing.name), families: {} };
+        const info = unitInfo(ing.unit);
+        const base = (ing.qty || 1) * info.factor;
+        needs[key].families[info.family] = (needs[key].families[info.family] || 0) + base;
+      }
     }
   }));
 
@@ -1494,8 +1495,8 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
     const newPlan = generatePlan(recipes, plan, settings, activeIds);
     // If generation filled nothing, tell the user why instead of failing
     // silently. Most common cause: recipes exist but none are meal-tagged.
-    const filledCount = DAYS.reduce((a, d) => a + MEALS.filter(m => newPlan[d]?.[m]?.recipeId).length, 0);
-    const hadCount = DAYS.reduce((a, d) => a + MEALS.filter(m => plan?.[d]?.[m]?.recipeId).length, 0);
+    const filledCount = DAYS.reduce((a, d) => a + MEALS.filter(m => slotEntries(newPlan[d]?.[m]).length > 0).length, 0);
+    const hadCount = DAYS.reduce((a, d) => a + MEALS.filter(m => slotEntries(plan?.[d]?.[m]).length > 0).length, 0);
     if (filledCount === hadCount) {
       const anyMealTagged = recipes.some(r => (r.mealTags || []).length > 0);
       setGenMsg(anyMealTagged
@@ -1557,13 +1558,34 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
     setPlan(prev => {
       const next = JSON.parse(JSON.stringify(prev));
       if (!next[day]) next[day] = {};
+      const existing = next[day][meal];
+      const entry = { recipeId: recipe.id, recipeName: recipe.name, role: recipe.role || "main" };
+      const prior = slotEntries(existing); // normalizes legacy single-recipe slots
+      // Don't add the same recipe twice to one meal.
+      const already = prior.some(e => e.recipeId === recipe.id);
+      const entries = already ? prior : [...prior, entry];
       next[day][meal] = {
-        recipeId: recipe.id, recipeName: recipe.name, locked: true,
+        entries,
+        locked: existing?.locked ?? true,
+        ...(existing?.cooked ? { cooked: true, cookedAt: existing.cookedAt } : {}),
       };
       return next;
     });
     setPickerSlot(null);
     setPickerSearch("");
+  }
+
+  // Remove a single entry (dish) from a meal, leaving the rest. If it was the
+  // last entry, the slot becomes empty.
+  function removeEntry(day, meal, recipeId) {
+    setPlan(prev => {
+      const next = JSON.parse(JSON.stringify(prev));
+      const slot = next[day]?.[meal];
+      if (!slot) return next;
+      const entries = slotEntries(slot).filter(e => e.recipeId !== recipeId);
+      next[day][meal] = entries.length ? { ...slot, entries, recipeId: undefined, recipeName: undefined } : null;
+      return next;
+    });
   }
 
   function assignPlaceholder(day, meal) {
@@ -1590,41 +1612,41 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
     setPlan(merged);
   }
 
-  // Build chunk summary
+  // Build chunk summary — count every entry (mains + sides) across all slots.
   const chunks = {};
   DAYS.forEach(d => MEALS.forEach(m => {
     const s = plan?.[d]?.[m];
-    if (!s?.recipeId) return;
-    if (!chunks[s.recipeId]) {
-      const r = recipes.find(x => x.id === s.recipeId);
-      chunks[s.recipeId] = { name: s.recipeName, total: r?.servings || 1, used: 0, meals: {}, color: MC[m]?.fg || COLORS.textSec, score: 0, recipeId: s.recipeId };
-      if (r) {
-        let sc = 0;
-        (r.tags||[]).forEach(t => { sc += settings.tagWeights[t] || 10; });
-        chunks[s.recipeId].score = sc;
+    for (const e of slotEntries(s)) {
+      if (!chunks[e.recipeId]) {
+        const r = recipes.find(x => x.id === e.recipeId);
+        chunks[e.recipeId] = { name: e.recipeName, total: r?.servings || 1, used: 0, meals: {}, color: MC[m]?.fg || COLORS.textSec, score: 0, recipeId: e.recipeId };
+        if (r) {
+          let sc = 0;
+          (r.tags||[]).forEach(t => { sc += settings.tagWeights[t] || 10; });
+          chunks[e.recipeId].score = sc;
+        }
       }
+      chunks[e.recipeId].used++;
+      chunks[e.recipeId].meals[m] = (chunks[e.recipeId].meals[m] || 0) + 1;
     }
-    chunks[s.recipeId].used++;
-    chunks[s.recipeId].meals[m] = (chunks[s.recipeId].meals[m] || 0) + 1;
   }));
   const chunkList = Object.values(chunks);
 
-  // Live slot fractions: for each recipe, number its occurrences in week
-  // reading order (Mon→Sun, Breakfast→Dinner) as "i/total". Derived from the
-  // actual plan every render, so manual/generated/rerolled all read honestly
-  // and nothing stale is stored on the slot.
-  const slotFraction = {}; // key: `${day}|${meal}` -> "i/total"
+  // Live recipe occurrence counts across the week (Mon→Sun, Breakfast→Dinner),
+  // counting every entry. Used for the "i/total" servings indicator.
+  const slotFraction = {}; // key: `${day}|${meal}` -> "i/total" (of the meal's first entry)
   const recipeTotals = {};
   DAYS.forEach(d => MEALS.forEach(m => {
-    const s = plan?.[d]?.[m];
-    if (s?.recipeId) recipeTotals[s.recipeId] = (recipeTotals[s.recipeId] || 0) + 1;
+    for (const e of slotEntries(plan?.[d]?.[m])) recipeTotals[e.recipeId] = (recipeTotals[e.recipeId] || 0) + 1;
   }));
   const recipeSeen = {};
   DAYS.forEach(d => MEALS.forEach(m => {
-    const s = plan?.[d]?.[m];
-    if (s?.recipeId) {
-      recipeSeen[s.recipeId] = (recipeSeen[s.recipeId] || 0) + 1;
-      slotFraction[`${d}|${m}`] = `${recipeSeen[s.recipeId]}/${recipeTotals[s.recipeId]}`;
+    const es = slotEntries(plan?.[d]?.[m]);
+    if (es.length) {
+      // Track the first entry's running index for the slot's fraction badge.
+      const e = es[0];
+      recipeSeen[e.recipeId] = (recipeSeen[e.recipeId] || 0) + 1;
+      if (recipeTotals[e.recipeId] > 1) slotFraction[`${d}|${m}`] = `${recipeSeen[e.recipeId]}/${recipeTotals[e.recipeId]}`;
     }
   }));
 
@@ -2205,7 +2227,7 @@ function ShopTab({ plan, recipes, setRecipes, pantry, setPantry, spices, setSpic
 
       {!generated ? (() => {
         const hasRecipes = recipes.length > 0;
-        const planHasMeals = DAYS.some(d => MEALS.some(m => plan?.[d]?.[m]?.recipeId));
+        const planHasMeals = DAYS.some(d => MEALS.some(m => slotEntries(plan?.[d]?.[m]).length > 0));
         if (!hasRecipes) {
           return (
             <Card style={{ marginTop:12, textAlign:"center", padding:24 }}>
