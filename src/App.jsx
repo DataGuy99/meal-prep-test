@@ -1433,6 +1433,31 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
     return { factor, tracked, spices, untracked };
   }
 
+  // Merge cook lines across all recipes in a meal (multiple mains + sides).
+  // Deductions for the same pantry item are summed; the resulting `after`
+  // reflects the combined draw so cooking the whole meal decrements once.
+  function buildCookLinesMulti(recipeList) {
+    const trackedById = {}; // pantryId -> merged line
+    const spices = new Set();
+    const untracked = [];
+    for (const recipe of recipeList) {
+      const lines = buildCookLines(recipe);
+      lines.spices.forEach(s => spices.add(s));
+      untracked.push(...lines.untracked);
+      for (const l of lines.tracked) {
+        if (!trackedById[l.id]) {
+          trackedById[l.id] = { ...l };
+        } else {
+          const m = trackedById[l.id];
+          m.deduct = round1(m.deduct + l.deduct);
+          // `after` recomputed from the original `have` minus the summed deduct.
+          m.after = round1(Math.max(0, m.have - m.deduct));
+        }
+      }
+    }
+    return { tracked: Object.values(trackedById), spices: [...spices], untracked };
+  }
+
   function applyCook(day, meal, recipe, lines) {
     // Decrement tracked pantry items.
     setPantry(prev => prev.map(p => {
@@ -1456,24 +1481,28 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
 
   function startCook(day, meal) {
     const slot = plan?.[day]?.[meal];
-    if (!slot?.recipeId) return;
-    const recipe = recipes.find(r => r.id === slot.recipeId);
-    if (!recipe) return;
-    const lines = buildCookLines(recipe);
+    const entries = slotEntries(slot);
+    if (entries.length === 0) return;
+    const recipeList = entries.map(e => recipes.find(r => r.id === e.recipeId)).filter(Boolean);
+    if (recipeList.length === 0) return;
+    const lines = buildCookLinesMulti(recipeList);
+    // A label and a representative recipe for the modal / view link.
+    const label = recipeList.map(r => r.name).join(" + ");
+    const cookCtx = { name: label, recipeList, _multi: recipeList.length > 1, ...recipeList[0] };
     if (settings.autoDecrement) {
-      applyCook(day, meal, recipe, lines);
+      applyCook(day, meal, cookCtx, lines);
     } else {
-      setCookModal({ day, meal, recipe, ...lines });
+      setCookModal({ day, meal, recipe: { ...cookCtx, name: label }, ...lines });
     }
   }
 
   function uncook(day, meal) {
-    // Reverse: add back the deducted quantities, clear cooked flag.
+    // Reverse: add back the deducted quantities across all entries, clear cooked.
     const slot = plan?.[day]?.[meal];
-    if (!slot?.recipeId) return;
-    const recipe = recipes.find(r => r.id === slot.recipeId);
-    if (recipe) {
-      const lines = buildCookLines(recipe);
+    const entries = slotEntries(slot);
+    const recipeList = entries.map(e => recipes.find(r => r.id === e.recipeId)).filter(Boolean);
+    if (recipeList.length) {
+      const lines = buildCookLinesMulti(recipeList);
       setPantry(prev => prev.map(p => {
         const line = lines.tracked.find(l => l.id === p.id);
         if (!line) return p;
@@ -1485,6 +1514,10 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
       if (next[day]?.[meal]) {
         delete next[day][meal].cooked;
         delete next[day][meal].cookedAt;
+        // Clear per-entry cooked flags too.
+        if (Array.isArray(next[day][meal].entries)) {
+          next[day][meal].entries = next[day][meal].entries.map(e => { const { cooked, cookedAt, ...rest } = e; return rest; });
+        }
       }
       return next;
     });
@@ -1573,6 +1606,7 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
     });
     setPickerSlot(null);
     setPickerSearch("");
+    setSelectedSlot({ day, meal }); // show the meal panel so they can add more / cook
   }
 
   // Remove a single entry (dish) from a meal, leaving the rest. If it was the
@@ -1703,21 +1737,32 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
                 {MEALS.map(m => {
                   const slot = plan?.[d]?.[m];
                   const isSel = selectedSlot?.day===d && selectedSlot?.meal===m;
+                  const filled = slotFilled(slot);
+                  const cooked = slotCooked(slot);
+                  const mains = slotMains(slot, recipes);
+                  const sides = slotSides(slot, recipes);
                   return (
                     <td key={m} style={{ padding:2, verticalAlign:"top" }}>
-                      {slot ? (
-                        <div onClick={() => { setSelectedSlot({ day:d, meal:m }); setPickerSlot(null); }} style={{ background:slot.placeholder?COLORS.surface:(slot.cooked?COLORS.goldBg:MC[m].bg), border:`${slot.cooked?2:1.5}px ${slot.placeholder?"dashed":"solid"} ${slot.cooked?COLORS.gold:(isSel?(slot.placeholder?COLORS.textSec:MC[m].fg):(slot.placeholder?COLORS.border:`${MC[m].fg}40`))}`, borderRadius:6, padding:"4px 6px", minHeight:36, position:"relative", cursor:"pointer" }}>
-                          {slot.cooked && <span style={{ position:"absolute", top:2, right:3, fontSize:10 }}>✓</span>}
-                          {slot.locked && !slot.placeholder && !slot.cooked && <span style={{ position:"absolute", top:2, right:3, fontSize:9, color:COLORS.lock }}>🔒</span>}
+                      {filled ? (
+                        <div onClick={() => { setSelectedSlot({ day:d, meal:m }); setPickerSlot(null); }} style={{ background:slot.placeholder?COLORS.surface:(cooked?COLORS.goldBg:MC[m].bg), border:`${cooked?2:1.5}px ${slot.placeholder?"dashed":"solid"} ${cooked?COLORS.gold:(isSel?(slot.placeholder?COLORS.textSec:MC[m].fg):(slot.placeholder?COLORS.border:`${MC[m].fg}40`))}`, borderRadius:6, padding:"4px 6px", minHeight:36, position:"relative", cursor:"pointer" }}>
+                          {cooked && <span style={{ position:"absolute", top:2, right:3, fontSize:10 }}>✓</span>}
+                          {slot.locked && !slot.placeholder && !cooked && <span style={{ position:"absolute", top:2, right:3, fontSize:9, color:COLORS.lock }}>🔒</span>}
                           {slot.placeholder ? (
                             <div style={{ fontSize:11, fontWeight:600, color:COLORS.textSec, lineHeight:1.2, display:"flex", alignItems:"center", gap:3 }}>
-                              <span style={{ fontSize:10 }}>🍽️</span> {slot.recipeName}
+                              <span style={{ fontSize:10 }}>🍽️</span> No-Cook Meal
                             </div>
                           ) : (
-                            <>
-                              <div style={{ fontSize:11, fontWeight:600, color:MC[m].fg, lineHeight:1.2, paddingRight:slot.locked?14:0 }}>{slot.recipeName}</div>
-                              <div style={{ fontSize:9, color:COLORS.textSec, marginTop:1 }}>{slotFraction[`${d}|${m}`]}</div>
-                            </>
+                            <div style={{ paddingRight:slot.locked?12:0 }}>
+                              {mains.map((e, i) => (
+                                <div key={e.recipeId} style={{ fontSize:11, fontWeight:600, color:MC[m].fg, lineHeight:1.25 }}>{e.recipeName}</div>
+                              ))}
+                              {sides.map((e) => (
+                                <div key={e.recipeId} style={{ fontSize:10, fontWeight:500, color:COLORS.textSec, lineHeight:1.25, display:"flex", alignItems:"center", gap:2 }}>
+                                  <span style={{ fontSize:7, opacity:0.6 }}>＋</span>{e.recipeName}
+                                </div>
+                              ))}
+                              {slotFraction[`${d}|${m}`] && <div style={{ fontSize:9, color:COLORS.textSec, marginTop:1 }}>{slotFraction[`${d}|${m}`]}</div>}
+                            </div>
                           )}
                         </div>
                       ) : (
@@ -1734,13 +1779,19 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
         </table>
       </div>
 
-      {pickerSlot && !plan?.[pickerSlot.day]?.[pickerSlot.meal] && (() => {
+      {pickerSlot && (() => {
         const mealKey = pickerSlot.meal.toLowerCase();
         const mealColor = MC[pickerSlot.meal];
         const now = Date.now();
+        const wantRole = pickerSlot.role; // "main" | "side" | undefined (any)
+        const existingSlot = plan?.[pickerSlot.day]?.[pickerSlot.meal];
+        const isAdding = slotEntries(existingSlot).length > 0; // adding to an existing meal
+        const alreadyIds = new Set(slotEntries(existingSlot).map(e => e.recipeId));
         const eligible = recipes.filter(r => {
           if (r.quarantine) return false;
           if (!(r.mealTags || []).includes(mealKey)) return false;
+          if (wantRole && (r.role || "main") !== wantRole) return false;
+          if (alreadyIds.has(r.id)) return false;
           if (pickerSearch) {
             const q = pickerSearch.toLowerCase();
             if (!r.name.toLowerCase().includes(q) && !(r.tags||[]).some(t => t.includes(q))) return false;
@@ -1753,28 +1804,32 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
         return (
           <Card style={{ marginTop:10, border:`2px solid ${mealColor.fg}`, maxHeight:320, display:"flex", flexDirection:"column" }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-              <span style={{ fontSize:13, fontWeight:700, color:mealColor.fg }}>{pickerSlot.day} {pickerSlot.meal}</span>
+              <span style={{ fontSize:13, fontWeight:700, color:mealColor.fg }}>
+                {pickerSlot.day} {pickerSlot.meal}{wantRole ? ` · add ${wantRole}` : ""}
+              </span>
               <span style={{ fontSize:11, color:COLORS.textSec, cursor:"pointer" }} onClick={() => setPickerSlot(null)}>✕</span>
             </div>
             <input
               value={pickerSearch} onChange={e => setPickerSearch(e.target.value)}
-              placeholder="Search recipes..." autoFocus
+              placeholder={wantRole ? `Search ${wantRole} dishes...` : "Search recipes..."} autoFocus
               style={{ padding:"7px 10px", borderRadius:6, border:`1.5px solid ${mealColor.fg}40`, fontSize:13, marginBottom:8, outline:"none" }}
             />
             <div style={{ flex:1, overflowY:"auto", display:"flex", flexDirection:"column", gap:4 }}>
-              <div onClick={() => assignPlaceholder(pickerSlot.day, pickerSlot.meal)} style={{
-                display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderRadius:6,
-                background:COLORS.surface, border:`1px dashed ${COLORS.textSec}50`, cursor:"pointer",
-              }}>
-                <span style={{ fontSize:14 }}>🍽️</span>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:COLORS.textSec }}>No-Cook Meal</div>
-                  <div style={{ fontSize:10, color:COLORS.textSec }}>Eat out, leftovers, skip — no recipe, no shopping</div>
+              {!isAdding && (
+                <div onClick={() => assignPlaceholder(pickerSlot.day, pickerSlot.meal)} style={{
+                  display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderRadius:6,
+                  background:COLORS.surface, border:`1px dashed ${COLORS.textSec}50`, cursor:"pointer",
+                }}>
+                  <span style={{ fontSize:14 }}>🍽️</span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:600, color:COLORS.textSec }}>No-Cook Meal</div>
+                    <div style={{ fontSize:10, color:COLORS.textSec }}>Eat out, leftovers, skip — no recipe, no shopping</div>
+                  </div>
                 </div>
-              </div>
+              )}
               {eligible.length === 0 && (
                 <div style={{ padding:16, textAlign:"center", fontSize:13, color:COLORS.textSec }}>
-                  No {mealKey}-tagged recipes{pickerSearch ? " matching search" : ""}
+                  No {wantRole ? wantRole + " " : ""}{mealKey}-tagged recipes{pickerSearch ? " matching search" : ""}
                 </div>
               )}
               {eligible.map(({ r, qual }) => (
@@ -1819,43 +1874,84 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
         );
       })()}
 
-      {selectedSlot && plan?.[selectedSlot.day]?.[selectedSlot.meal] && (() => {
+      {selectedSlot && slotFilled(plan?.[selectedSlot.day]?.[selectedSlot.meal]) && (() => {
         const sl = plan[selectedSlot.day][selectedSlot.meal];
-        const borderC = sl.placeholder ? COLORS.textSec : (sl.cooked ? COLORS.gold : MC[selectedSlot.meal].fg);
+        const cooked = slotCooked(sl);
+        const borderC = sl.placeholder ? COLORS.textSec : (cooked ? COLORS.gold : MC[selectedSlot.meal].fg);
+        const mains = slotMains(sl, recipes);
+        const sides = slotSides(sl, recipes);
+        const comp = (settings.mealComposition || {})[selectedSlot.meal] || { mainsMin:1, mainsMax:2, sidesMin:0, sidesMax:2 };
+
+        const EntryRow = (e, kind) => (
+          <div key={e.recipeId} style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 8px", borderRadius:6, background:"#fff", border:`1px solid ${COLORS.border}`, marginBottom:4 }}>
+            <span style={{ flex:1, fontSize:13, fontWeight:kind==="main"?600:500, color:kind==="main"?COLORS.text:COLORS.textSec, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.recipeName}</span>
+            <span onClick={() => { const rec = recipes.find(r => r.id === e.recipeId); if (rec) setViewRecipe(rec); }} style={{ fontSize:11, color:COLORS.primary, cursor:"pointer", fontWeight:600 }}>View</span>
+            {!cooked && <span onClick={() => removeEntry(selectedSlot.day, selectedSlot.meal, e.recipeId)} style={{ fontSize:14, color:COLORS.textSec, cursor:"pointer" }}>×</span>}
+          </div>
+        );
+
         return (
         <Card style={{ marginTop:10, border:`2px solid ${borderC}` }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
             <span style={{ fontSize:13, fontWeight:700 }}>
-              {sl.cooked && <span style={{ color:COLORS.gold, marginRight:4 }}>✓</span>}
-              {selectedSlot.day} {selectedSlot.meal}: {sl.recipeName}
+              {cooked && <span style={{ color:COLORS.gold, marginRight:4 }}>✓</span>}
+              {selectedSlot.day} {selectedSlot.meal}
             </span>
             <span style={{ fontSize:11, color:COLORS.textSec, cursor:"pointer" }} onClick={() => setSelectedSlot(null)}>✕</span>
           </div>
-          {sl.cooked && (
+
+          {cooked && (
             <div style={{ fontSize:11, color:COLORS.gold, marginBottom:8 }}>
               Cooked{sl.cookedAt ? ` ${new Date(sl.cookedAt).toLocaleDateString(undefined,{month:"short",day:"numeric"})}` : ""} · ingredients deducted from pantry
             </div>
           )}
-          <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-            {sl.placeholder ? (
+
+          {sl.placeholder ? (
+            <div style={{ marginBottom:6 }}>
+              <div style={{ fontSize:12, color:COLORS.textSec, marginBottom:8 }}>🍽️ No-Cook Meal — a meal you're not cooking from a recipe (leftovers, eating out, etc.)</div>
               <Btn small variant="ghost" style={{ color:COLORS.red, borderColor:COLORS.red }} onClick={() => removeSlot(selectedSlot.day, selectedSlot.meal)}>Remove</Btn>
-            ) : sl.cooked ? (
-              <>
-                <Btn small variant="secondary" onClick={() => { const rec = recipes.find(r => r.id === sl.recipeId); if (rec) setViewRecipe(rec); }}>📖 View recipe</Btn>
-                <Btn small variant="ghost" style={{ color:COLORS.gold, borderColor:COLORS.gold }} onClick={() => uncook(selectedSlot.day, selectedSlot.meal)}>↩ Uncook (restore pantry)</Btn>
-              </>
-            ) : (
-              <>
-                <Btn small variant="primary" style={{ background:COLORS.gold }} onClick={() => startCook(selectedSlot.day, selectedSlot.meal)}>🍳 Cook</Btn>
-                <Btn small variant="secondary" onClick={() => { const rec = recipes.find(r => r.id === sl.recipeId); if (rec) setViewRecipe(rec); }}>📖 View</Btn>
-                <Btn small variant={sl.locked?"primary":"ghost"} onClick={() => toggleLock(selectedSlot.day, selectedSlot.meal)} style={sl.locked?{ background:COLORS.lock }:{}}>
-                  {sl.locked?"🔒 Locked":"🔓 Lock"}
-                </Btn>
-                <Btn small variant="secondary" onClick={() => doRerollSlot(selectedSlot.day, selectedSlot.meal)}>🎲 Reroll</Btn>
-                <Btn small variant="ghost" style={{ color:COLORS.red, borderColor:COLORS.red }} onClick={() => removeSlot(selectedSlot.day, selectedSlot.meal)}>Remove</Btn>
-              </>
-            )}
-          </div>
+            </div>
+          ) : (
+            <>
+              {/* Mains section */}
+              <div style={{ marginBottom:10 }}>
+                <div style={{ fontSize:10, fontWeight:700, color:MC[selectedSlot.meal].fg, textTransform:"uppercase", letterSpacing:0.6, marginBottom:4 }}>
+                  Mains <span style={{ color:COLORS.textSec, fontWeight:500 }}>({mains.length} of {comp.mainsMin}{comp.mainsMax!==comp.mainsMin?`–${comp.mainsMax}`:""})</span>
+                </div>
+                {mains.map(e => EntryRow(e, "main"))}
+                {!cooked && mains.length < comp.mainsMax && (
+                  <Btn small variant="ghost" onClick={() => { setPickerSlot({ day:selectedSlot.day, meal:selectedSlot.meal, role:"main" }); setPickerSearch(""); }}>+ Add main</Btn>
+                )}
+              </div>
+
+              {/* Sides section */}
+              <div style={{ marginBottom:12 }}>
+                <div style={{ fontSize:10, fontWeight:700, color:"#7A5C2E", textTransform:"uppercase", letterSpacing:0.6, marginBottom:4 }}>
+                  Sides <span style={{ color:COLORS.textSec, fontWeight:500 }}>({sides.length} of {comp.sidesMin}{comp.sidesMax!==comp.sidesMin?`–${comp.sidesMax}`:""})</span>
+                </div>
+                {sides.map(e => EntryRow(e, "side"))}
+                {!cooked && sides.length < comp.sidesMax && (
+                  <Btn small variant="ghost" onClick={() => { setPickerSlot({ day:selectedSlot.day, meal:selectedSlot.meal, role:"side" }); setPickerSearch(""); }}>+ Add side</Btn>
+                )}
+              </div>
+
+              {/* Meal-level actions */}
+              <div style={{ display:"flex", gap:6, flexWrap:"wrap", borderTop:`1px solid ${COLORS.border}`, paddingTop:10 }}>
+                {cooked ? (
+                  <Btn small variant="ghost" style={{ color:COLORS.gold, borderColor:COLORS.gold }} onClick={() => uncook(selectedSlot.day, selectedSlot.meal)}>↩ Uncook (restore pantry)</Btn>
+                ) : (
+                  <>
+                    <Btn small variant="primary" style={{ background:COLORS.gold }} onClick={() => startCook(selectedSlot.day, selectedSlot.meal)}>🍳 Cook</Btn>
+                    <Btn small variant={sl.locked?"primary":"ghost"} onClick={() => toggleLock(selectedSlot.day, selectedSlot.meal)} style={sl.locked?{ background:COLORS.lock }:{}}>
+                      {sl.locked?"🔒 Locked":"🔓 Lock"}
+                    </Btn>
+                    <Btn small variant="secondary" onClick={() => doRerollSlot(selectedSlot.day, selectedSlot.meal)}>🎲 Reroll</Btn>
+                    <Btn small variant="ghost" style={{ color:COLORS.red, borderColor:COLORS.red }} onClick={() => removeSlot(selectedSlot.day, selectedSlot.meal)}>Remove meal</Btn>
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </Card>
         );
       })()}
