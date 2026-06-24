@@ -1869,7 +1869,7 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
 // ============================================================
 // SHOP TAB
 // ============================================================
-function ShopTab({ plan, recipes, pantry, setPantry, spices, setSpices, settings, people, setTab }) {
+function ShopTab({ plan, recipes, setRecipes, pantry, setPantry, spices, setSpices, settings, people, setTab }) {
   // Active eater ids for scope-aware omission (M). Null when roster empty/all
   // inactive, so person-scoped restrictions don't omit anything.
   const activeIds = (() => {
@@ -1884,6 +1884,21 @@ function ShopTab({ plan, recipes, pantry, setPantry, spices, setSpices, settings
   const [manualQty, setManualQty] = useState("");
   const [generated, setGenerated] = useState(false);
   const [stockedMsg, setStockedMsg] = useState("");
+  const [mergeMode, setMergeMode] = useState(false);
+  const [mergeSel, setMergeSel] = useState([]);   // ids of items selected to merge
+  const [mergePrompt, setMergePrompt] = useState(false); // showing the name prompt
+  const [mergeName, setMergeName] = useState("");
+  const [needsRegen, setNeedsRegen] = useState(false);
+
+  // After a merge rewrites recipes, regenerate the list on the next render.
+  useEffect(() => {
+    if (needsRegen) {
+      const manual = shopItems.filter(i => i.source === "manual");
+      const unified = buildUnifiedList(plan, recipes, pantry, excludes, activeIds, maxOmissions);
+      setShopItems([...unified, ...manual].map((x, i) => ({ ...x, id: x.id || ("s" + i), checked: false })));
+      setNeedsRegen(false);
+    }
+  }, [needsRegen, recipes]);
 
   function doGenerate() {
     // Preserve any manual items the user added, re-merge with fresh plan+floor.
@@ -1907,6 +1922,36 @@ function ShopTab({ plan, recipes, pantry, setPantry, spices, setSpices, settings
   }
 
   function toggle(id) { setShopItems(p => p.map(x => x.id === id ? { ...x, checked: !x.checked } : x)); }
+
+  function toggleMergeSel(id) {
+    setMergeSel(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  // Confirm a merge: rename every recipe ingredient that matches any of the
+  // selected shopping-list items to the canonical name the user typed. This
+  // fixes the source recipes, so future lists consolidate automatically.
+  function confirmMerge() {
+    const canonical = mergeName.trim();
+    if (!canonical || mergeSel.length < 2) return;
+    const selectedNames = new Set(
+      shopItems.filter(i => mergeSel.includes(i.id)).map(i => normalize(i.name))
+    );
+    setRecipes(prev => prev.map(r => ({
+      ...r,
+      ingredients: (r.ingredients || []).map(ing =>
+        selectedNames.has(normalize(ing.name)) ? { ...ing, name: normalize(canonical) } : ing
+      ),
+    })));
+    // Exit merge mode and regenerate so the consolidated list shows.
+    setMergeMode(false);
+    setMergePrompt(false);
+    setMergeSel([]);
+    setMergeName("");
+    setStockedMsg(`Merged ${selectedNames.size} item${selectedNames.size>1?"s":""} into "${canonical}"`);
+    setTimeout(() => setStockedMsg(""), 3000);
+    // Recipes state will have updated by next render; regenerate then.
+    setNeedsRegen(true);
+  }
   function addManual() {
     if (!manualName.trim()) return;
     // Dedup: if this ingredient is already on the list (same name+family), don't double-add.
@@ -1976,10 +2021,26 @@ function ShopTab({ plan, recipes, pantry, setPantry, spices, setSpices, settings
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
         <span style={{ fontSize:14, fontWeight:700 }}>Shopping List</span>
         <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-          {generated && <span style={{ fontSize:12, color:COLORS.textSec }}>{totalChecked}/{totalItems}</span>}
-          <Btn small onClick={doGenerate}>{generated ? "Refresh" : "Generate"}</Btn>
+          {mergeMode ? (
+            <>
+              <span style={{ fontSize:11, color:COLORS.textSec }}>{mergeSel.length} selected</span>
+              <Btn small variant="ghost" onClick={() => { setMergeMode(false); setMergeSel([]); }}>Cancel</Btn>
+              <Btn small disabled={mergeSel.length < 2} onClick={() => { setMergeName(""); setMergePrompt(true); }}>✓ Merge</Btn>
+            </>
+          ) : (
+            <>
+              {generated && <span style={{ fontSize:12, color:COLORS.textSec }}>{totalChecked}/{totalItems}</span>}
+              {generated && shopItems.length > 1 && <Btn small variant="ghost" onClick={() => { setMergeMode(true); setMergeSel([]); }} title="Merge duplicate items">⇄ Merge</Btn>}
+              <Btn small onClick={doGenerate}>{generated ? "Refresh" : "Generate"}</Btn>
+            </>
+          )}
         </div>
       </div>
+      {mergeMode && (
+        <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:8, padding:"6px 10px", background:COLORS.surface, borderRadius:6 }}>
+          Check the duplicate items that are really the same ingredient, then tap Merge to combine them under one name.
+        </div>
+      )}
 
       {stockedMsg && (
         <div style={{ padding:"8px 12px", borderRadius:8, background:COLORS.boostBg, color:COLORS.boost, fontSize:12, fontWeight:600, marginBottom:10 }}>
@@ -2039,18 +2100,20 @@ function ShopTab({ plan, recipes, pantry, setPantry, spices, setSpices, settings
                 {shopItems.filter(i => (i[groupKey]||"Other") === g).map(item => {
                   const srcs = item.sources || [item.source];
                   const isFloor = srcs.includes("floor");
+                  const selForMerge = mergeSel.includes(item.id);
+                  const boxOn = mergeMode ? selForMerge : item.checked;
                   return (
-                    <div key={item.id} onClick={() => toggle(item.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderRadius:6, background:item.checked?`${COLORS.primary}08`:"transparent", cursor:"pointer", marginBottom:2 }}>
-                      <div style={{ width:20, height:20, borderRadius:4, border:`2px solid ${item.checked?COLORS.primary:(isFloor?COLORS.red:COLORS.border)}`, background:item.checked?COLORS.primary:"transparent", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                        {item.checked && <span style={{ color:"#fff", fontSize:12, fontWeight:700 }}>✓</span>}
+                    <div key={item.id} onClick={() => mergeMode ? toggleMergeSel(item.id) : toggle(item.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderRadius:6, background:boxOn?`${COLORS.primary}08`:"transparent", cursor:"pointer", marginBottom:2, border:mergeMode&&selForMerge?`1.5px solid ${COLORS.primary}`:"1.5px solid transparent" }}>
+                      <div style={{ width:20, height:20, borderRadius:mergeMode?10:4, border:`2px solid ${boxOn?COLORS.primary:(isFloor&&!mergeMode?COLORS.red:COLORS.border)}`, background:boxOn?COLORS.primary:"transparent", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                        {boxOn && <span style={{ color:"#fff", fontSize:12, fontWeight:700 }}>✓</span>}
                       </div>
                       <div style={{ flex:1, minWidth:0 }}>
-                        <span style={{ fontSize:14, color:item.checked?COLORS.textSec:COLORS.text, textDecoration:item.checked?"line-through":"none" }}>{item.name}</span>
-                        {item.reason && <div style={{ fontSize:9, color:COLORS.red }}>{item.reason}</div>}
+                        <span style={{ fontSize:14, color:(item.checked&&!mergeMode)?COLORS.textSec:COLORS.text, textDecoration:(item.checked&&!mergeMode)?"line-through":"none" }}>{item.name}</span>
+                        {item.reason && !mergeMode && <div style={{ fontSize:9, color:COLORS.red }}>{item.reason}</div>}
                       </div>
                       <div style={{ textAlign:"right", flexShrink:0 }}>
                         <div style={{ fontSize:12, color:COLORS.textSec }}>{item.unit ? `${item.qty} ${item.unit}` : `×${item.qty}`}</div>
-                        {groupBy==="category" && item.store && <div style={{ fontSize:9, color:COLORS.textSec }}>{item.store}</div>}
+                        {groupBy==="category" && item.store && !mergeMode && <div style={{ fontSize:9, color:COLORS.textSec }}>{item.store}</div>}
                       </div>
                     </div>
                   );
@@ -2080,11 +2143,32 @@ function ShopTab({ plan, recipes, pantry, setPantry, spices, setSpices, settings
           </div>
         </>
       )}
+
+      {mergePrompt && (
+        <div onClick={() => setMergePrompt(false)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:60, padding:16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background:COLORS.bg, borderRadius:14, width:"100%", maxWidth:380, padding:"20px 18px", boxShadow:"0 12px 48px rgba(0,0,0,0.3)" }}>
+            <div style={{ fontSize:16, fontWeight:800, marginBottom:6 }}>Merge into one ingredient</div>
+            <div style={{ fontSize:12, color:COLORS.textSec, marginBottom:12, lineHeight:1.4 }}>
+              These will be renamed everywhere they appear in your recipes, so future lists stay consolidated.
+            </div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:14 }}>
+              {shopItems.filter(i => mergeSel.includes(i.id)).map(i => (
+                <span key={i.id} style={{ fontSize:11, padding:"3px 8px", borderRadius:99, background:COLORS.surface, border:`1px solid ${COLORS.border}` }}>{i.name}</span>
+              ))}
+            </div>
+            <div style={{ fontSize:11, fontWeight:600, color:COLORS.textSec, marginBottom:4 }}>Rename all of these to:</div>
+            <input autoFocus value={mergeName} onChange={e => setMergeName(e.target.value)} placeholder="e.g. ground black pepper"
+              style={{ width:"100%", boxSizing:"border-box", padding:"10px 12px", borderRadius:8, border:`1.5px solid ${COLORS.border}`, fontSize:14, marginBottom:16 }} />
+            <div style={{ display:"flex", gap:8 }}>
+              <Btn style={{ flex:1 }} disabled={!mergeName.trim()} onClick={confirmMerge}>Merge</Btn>
+              <Btn variant="ghost" onClick={() => setMergePrompt(false)}>Cancel</Btn>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
-// ============================================================
 // PANTRY TAB
 // ============================================================
 function PantryTab({ pantry, setPantry, spices, setSpices }) {
@@ -2843,7 +2927,7 @@ export default function App() {
       <div style={{ flex:1, padding:"12px 16px 90px", overflowY:"auto" }}>
         {tab === "Recipes" && <RecipesTab recipes={recipes} setRecipes={setRecipes} settings={settings} setSettings={setSettings} dictionary={dictionary} setDictionary={setDictionary} />}
         {tab === "Plan" && <PlanTab recipes={recipes} setRecipes={setRecipes} plan={plan} setPlan={setPlan} settings={settings} pantry={pantry} setPantry={setPantry} people={people} spices={spices} setSpices={setSpices} setTab={setTab} />}
-        {tab === "Shop" && <ShopTab plan={plan} recipes={recipes} pantry={pantry} setPantry={setPantry} spices={spices} setSpices={setSpices} settings={settings} people={people} setTab={setTab} />}
+        {tab === "Shop" && <ShopTab plan={plan} recipes={recipes} setRecipes={setRecipes} pantry={pantry} setPantry={setPantry} spices={spices} setSpices={setSpices} settings={settings} people={people} setTab={setTab} />}
         {tab === "Pantry" && <PantryTab pantry={pantry} setPantry={setPantry} spices={spices} setSpices={setSpices} />}
         {tab === "Settings" && <SettingsTab settings={settings} setSettings={setSettings} people={people} setPeople={setPeople} />}
       </div>
