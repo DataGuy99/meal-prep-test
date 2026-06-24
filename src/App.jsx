@@ -939,7 +939,7 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
   const [expandedId, setExpandedId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null); // recipe id being edited, or null for new
-  const [addForm, setAddForm] = useState({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"", instructions:"", url:"" });
+  const [addForm, setAddForm] = useState({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"", instructions:"", url:"", role:"main" });
   const formRef = useRef(null);
 
   const allTags = useMemo(() => [...new Set([...Object.keys(settings.tagWeights || {}), ...recipes.flatMap(r => r.tags || [])])].sort(), [recipes, settings.tagWeights]);
@@ -982,7 +982,7 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
     bg: COLORS.quarantineBg, color: COLORS.quarantine,
   }));
 
-  const blankForm = { name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"", instructions:"", url:"" };
+  const blankForm = { name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"", instructions:"", url:"", role:"main" };
 
   // Serialize a recipe's ingredients of one tier back into editable text lines.
   // Keep the quantity whenever there's a unit (so "1 kg beef" round-trips); only
@@ -1005,6 +1005,7 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
       secondaryText: ingsToText(r.ingredients, "secondary"),
       instructions: r.instructions || "",
       url: r.url || "",
+      role: r.role || "main",
     });
     setEditId(r.id);
     setShowAdd(true);
@@ -1038,6 +1039,7 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
       ingredients: newIngs, quarantine: isQ,
       instructions: addForm.instructions.trim(),
       url: addForm.url.trim(),
+      role: addForm.role || "main",
       quarantineItems: redHits.map(r => ({ ingredient: r.name, sub: "" })),
     };
 
@@ -1096,6 +1098,20 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
             <div style={{ fontSize:14, fontWeight:700, color:COLORS.primary, marginBottom:10 }}>{editId ? "Edit Recipe" : "New Recipe"}</div>
             <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
               <input placeholder="Recipe name" value={addForm.name} onChange={e => setAddForm(p => ({ ...p, name: e.target.value }))} style={{ padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14 }} />
+              <div>
+                <div style={{ display:"flex", gap:0, borderRadius:8, overflow:"hidden", border:`1.5px solid ${COLORS.border}` }}>
+                  {[["main","Main dish"],["side","Side dish"]].map(([val, label]) => (
+                    <button key={val} type="button" onClick={() => setAddForm(p => ({ ...p, role: val }))}
+                      style={{ flex:1, padding:"9px 8px", border:"none", cursor:"pointer", fontSize:13, fontWeight:addForm.role===val?700:500,
+                        background:addForm.role===val?COLORS.primary:"#fff", color:addForm.role===val?"#fff":COLORS.textSec }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize:10, color:COLORS.textSec, marginTop:3 }}>
+                  {addForm.role==="main" ? "The centerpiece of a meal (entrée, protein, main course)." : "Accompanies a main — soup, salad, grain, vegetable, etc."}
+                </div>
+              </div>
               <div>
                 <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Category tags</div>
                 <Combobox multi options={allTags} placeholder="Type or select..." selected={addForm.tags} onChange={v => {
@@ -1175,6 +1191,7 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
               <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                   <span style={{ fontSize:15, fontWeight:700 }}>{r.name}</span>
+                  <Badge color={(r.role||"main")==="side"?"#7A5C2E":COLORS.primary} bg={(r.role||"main")==="side"?"#F3E8D0":`${COLORS.primary}18`}>{(r.role||"main")==="side"?"Side":"Main"}</Badge>
                   {r.quarantine && <Badge color={COLORS.quarantine} bg={COLORS.quarantineBg}>Quarantined</Badge>}
                   {r.shelvedUntil && r.shelvedUntil > Date.now() && <Badge color={COLORS.lock} bg={COLORS.surface}>💤 Shelved</Badge>}
                 </div>
@@ -1208,6 +1225,18 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
                   <div>
                     <div style={{ fontSize:10, color:COLORS.textSec, fontWeight:600 }}>Servings</div>
                     <NumberInput value={r.servings} onCommit={v => updateRecipe(r.id, { servings: v })} min={1} fallback={1} style={{ width:50, padding:"3px 5px", borderRadius:4, border:`1px solid ${COLORS.border}`, fontSize:13, textAlign:"center", marginTop:2 }} />
+                  </div>
+                </div>
+                <div style={{ marginBottom:10 }}>
+                  <div style={{ fontSize:10, color:COLORS.textSec, fontWeight:600, marginBottom:4 }}>Dish type</div>
+                  <div style={{ display:"flex", borderRadius:6, overflow:"hidden", border:`1px solid ${COLORS.border}`, maxWidth:220 }}>
+                    {[["main","Main"],["side","Side"]].map(([val, label]) => (
+                      <button key={val} type="button" onClick={(e) => { e.stopPropagation(); updateRecipe(r.id, { role: val }); }}
+                        style={{ flex:1, padding:"6px 8px", border:"none", cursor:"pointer", fontSize:12, fontWeight:(r.role||"main")===val?700:500,
+                          background:(r.role||"main")===val?COLORS.primary:"#fff", color:(r.role||"main")===val?"#fff":COLORS.textSec }}>
+                        {label}
+                      </button>
+                    ))}
                   </div>
                 </div>
                 {(r.tags || []).length > 0 && (
