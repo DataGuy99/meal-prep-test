@@ -331,6 +331,43 @@ function calcWeight(recipe, settings, planTagCounts, activePersonIds = null) {
   return starW * (1 + tagW) * fatigue * boostMul * rangeMul;
 }
 
+// ── Slot model helpers ──────────────────────────────────────────────
+// A slot may be legacy single-recipe { recipeId, recipeName, ... } or the new
+// multi-entry { entries: [{ recipeId, recipeName, role, cooked, cookedAt }] }.
+// These normalize any slot so all call sites can treat it uniformly. A legacy
+// slot reads as a single 'main' entry; placeholders carry no entries.
+function slotEntries(slot) {
+  if (!slot || slot.placeholder) return [];
+  if (Array.isArray(slot.entries)) return slot.entries;
+  if (slot.recipeId) return [{ recipeId: slot.recipeId, recipeName: slot.recipeName, role: slot.role || "main", cooked: slot.cooked, cookedAt: slot.cookedAt }];
+  return [];
+}
+function slotMains(slot, recipes) {
+  return slotEntries(slot).filter(e => roleOf(e, recipes) === "main");
+}
+function slotSides(slot, recipes) {
+  return slotEntries(slot).filter(e => roleOf(e, recipes) === "side");
+}
+// The role of an entry: prefer the entry's stored role, fall back to the
+// recipe's current role, defaulting to main.
+function roleOf(entry, recipes) {
+  if (entry.role) return entry.role;
+  const r = (recipes || []).find(x => x.id === entry.recipeId);
+  return (r && r.role) || "main";
+}
+// True if the slot has any content (entries or placeholder).
+function slotFilled(slot) {
+  return !!(slot && (slot.placeholder || slotEntries(slot).length > 0));
+}
+// Whole-slot cooked state: true only if every entry is cooked (slot-level cook
+// marks all). Legacy slots expose slot.cooked directly.
+function slotCooked(slot) {
+  if (!slot) return false;
+  if (slot.cooked) return true;
+  const es = slotEntries(slot);
+  return es.length > 0 && es.every(e => e.cooked);
+}
+
 function generatePlan(recipes, existingPlan, settings, activePersonIds = null) {
   const plan = {};
   DAYS.forEach(d => {
