@@ -1024,6 +1024,68 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
             <Btn small variant={grouped?"primary":"ghost"} onClick={() => setGrouped(g => !g)} title="Group by category">⊞ Group</Btn>
           </div>
           {!showAdd && <Btn onClick={() => { setEditId(null); setAddForm(blankForm); setShowAdd(true); setTimeout(() => formRef.current?.scrollIntoView({ behavior:"smooth", block:"start" }), 50); }} style={{ width:"100%", marginBottom:14 }}>+ Add Recipe</Btn>}
+      <div style={{ marginTop:16 }}>
+        {showAdd && (
+          <div ref={formRef}>
+          <Card style={{ border:`2px solid ${COLORS.primary}` }}>
+            <div style={{ fontSize:14, fontWeight:700, color:COLORS.primary, marginBottom:10 }}>{editId ? "Edit Recipe" : "New Recipe"}</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              <input placeholder="Recipe name" value={addForm.name} onChange={e => setAddForm(p => ({ ...p, name: e.target.value }))} style={{ padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14 }} />
+              <div>
+                <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Category tags</div>
+                <Combobox multi options={allTags} placeholder="Type or select..." selected={addForm.tags} onChange={v => {
+                  // Conglomerate fuzzy/plural variants into canonical tags.
+                  const known = allTags.filter(t => !v.includes(t));
+                  const merged = [...new Set(v.map(t => canonicalizeTag(t, [...known, ...DEFAULT_TAGS])))];
+                  setAddForm(p => ({ ...p, tags: merged }));
+                }} />
+              </div>
+              <div>
+                <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Meal suitability</div>
+                <Combobox multi options={["breakfast","lunch","dinner"]} placeholder="breakfast, lunch, dinner..." selected={addForm.mealTags} onChange={v => setAddForm(p => ({ ...p, mealTags: v }))} />
+              </div>
+              <div style={{ display:"flex", gap:8 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Servings</div>
+                  <NumberInput value={addForm.servings} onCommit={v => setAddForm(p => ({ ...p, servings: v }))} min={1} fallback={1} style={{ width:"100%", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14, boxSizing:"border-box" }} />
+                </div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Slot range</div>
+                  <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+                    <NumberInput value={addForm.slotsMin} onCommit={v => setAddForm(p => ({ ...p, slotsMin: v }))} min={1} fallback={1} style={{ width:"100%", padding:"8px 6px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14, boxSizing:"border-box", textAlign:"center" }} />
+                    <span style={{ color:COLORS.textSec }}>–</span>
+                    <NumberInput value={addForm.slotsMax} onCommit={v => setAddForm(p => ({ ...p, slotsMax: v }))} min={1} fallback={1} style={{ width:"100%", padding:"8px 6px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14, boxSizing:"border-box", textAlign:"center" }} />
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Rating</div>
+                <StarRating rating={addForm.stars} size={22} onChange={v => setAddForm(p => ({ ...p, stars: v }))} />
+              </div>
+              <div>
+                <div style={{ fontSize:11, color:COLORS.text, marginBottom:2, fontWeight:700 }}>Essential ingredients</div>
+                <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>The ones that define the dish. If someone can't have one of these, the recipe won't work for them.</div>
+                <textarea placeholder={"2 cups rice\n1.5 kg chicken thigh"} value={addForm.essentialText} onChange={e => setAddForm(p => ({ ...p, essentialText: e.target.value }))} rows={4} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.primary}80`, fontSize:13, resize:"vertical", fontFamily:"inherit" }} />
+              </div>
+              <div>
+                <div style={{ fontSize:11, color:COLORS.text, marginBottom:2, fontWeight:700 }}>Secondary ingredients <span style={{ color:COLORS.textSec, fontWeight:400 }}>(optional)</span></div>
+                <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>Accessories that can be left out. If someone can't have one, it's just omitted and the recipe still works.</div>
+                <textarea placeholder={"3 cloves garlic\n1 onion\ncilantro"} value={addForm.secondaryText} onChange={e => setAddForm(p => ({ ...p, secondaryText: e.target.value }))} rows={3} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, resize:"vertical", fontFamily:"inherit" }} />
+              </div>
+              <div>
+                <div style={{ fontSize:11, color:COLORS.text, marginBottom:2, fontWeight:700 }}>Instructions <span style={{ color:COLORS.textSec, fontWeight:400 }}>(optional)</span></div>
+                <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>Steps to make it. Shown when you're cooking the meal.</div>
+                <textarea placeholder={"1. Brown the chicken...\n2. Add the sauce and simmer 20 min...\n3. Serve over rice"} value={addForm.instructions} onChange={e => setAddForm(p => ({ ...p, instructions: e.target.value }))} rows={4} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, resize:"vertical", fontFamily:"inherit" }} />
+              </div>
+              <div style={{ display:"flex", gap:8 }}>
+                <Btn style={{ flex:1 }} onClick={saveRecipe} disabled={!addForm.name.trim() || !addForm.essentialText.trim()}>{editId ? "Save Changes" : "Save Recipe"}</Btn>
+                <Btn variant="ghost" onClick={closeForm}>Cancel</Btn>
+              </div>
+            </div>
+          </Card>
+          </div>
+        )}
+      </div>
         </>
       )}
       {recipes.length === 0 && !showAdd && (
@@ -1153,68 +1215,6 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
         }
         return <div style={{ display:"flex", flexDirection:"column", gap:8 }}>{filtered.map(renderCard)}</div>;
       })()}
-      <div style={{ marginTop:16 }}>
-        {showAdd && (
-          <div ref={formRef}>
-          <Card style={{ border:`2px solid ${COLORS.primary}` }}>
-            <div style={{ fontSize:14, fontWeight:700, color:COLORS.primary, marginBottom:10 }}>{editId ? "Edit Recipe" : "New Recipe"}</div>
-            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-              <input placeholder="Recipe name" value={addForm.name} onChange={e => setAddForm(p => ({ ...p, name: e.target.value }))} style={{ padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14 }} />
-              <div>
-                <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Category tags</div>
-                <Combobox multi options={allTags} placeholder="Type or select..." selected={addForm.tags} onChange={v => {
-                  // Conglomerate fuzzy/plural variants into canonical tags.
-                  const known = allTags.filter(t => !v.includes(t));
-                  const merged = [...new Set(v.map(t => canonicalizeTag(t, [...known, ...DEFAULT_TAGS])))];
-                  setAddForm(p => ({ ...p, tags: merged }));
-                }} />
-              </div>
-              <div>
-                <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Meal suitability</div>
-                <Combobox multi options={["breakfast","lunch","dinner"]} placeholder="breakfast, lunch, dinner..." selected={addForm.mealTags} onChange={v => setAddForm(p => ({ ...p, mealTags: v }))} />
-              </div>
-              <div style={{ display:"flex", gap:8 }}>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Servings</div>
-                  <NumberInput value={addForm.servings} onCommit={v => setAddForm(p => ({ ...p, servings: v }))} min={1} fallback={1} style={{ width:"100%", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14, boxSizing:"border-box" }} />
-                </div>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Slot range</div>
-                  <div style={{ display:"flex", alignItems:"center", gap:4 }}>
-                    <NumberInput value={addForm.slotsMin} onCommit={v => setAddForm(p => ({ ...p, slotsMin: v }))} min={1} fallback={1} style={{ width:"100%", padding:"8px 6px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14, boxSizing:"border-box", textAlign:"center" }} />
-                    <span style={{ color:COLORS.textSec }}>–</span>
-                    <NumberInput value={addForm.slotsMax} onCommit={v => setAddForm(p => ({ ...p, slotsMax: v }))} min={1} fallback={1} style={{ width:"100%", padding:"8px 6px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:14, boxSizing:"border-box", textAlign:"center" }} />
-                  </div>
-                </div>
-              </div>
-              <div>
-                <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Rating</div>
-                <StarRating rating={addForm.stars} size={22} onChange={v => setAddForm(p => ({ ...p, stars: v }))} />
-              </div>
-              <div>
-                <div style={{ fontSize:11, color:COLORS.text, marginBottom:2, fontWeight:700 }}>Essential ingredients</div>
-                <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>The ones that define the dish. If someone can't have one of these, the recipe won't work for them.</div>
-                <textarea placeholder={"2 cups rice\n1.5 kg chicken thigh"} value={addForm.essentialText} onChange={e => setAddForm(p => ({ ...p, essentialText: e.target.value }))} rows={4} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.primary}80`, fontSize:13, resize:"vertical", fontFamily:"inherit" }} />
-              </div>
-              <div>
-                <div style={{ fontSize:11, color:COLORS.text, marginBottom:2, fontWeight:700 }}>Secondary ingredients <span style={{ color:COLORS.textSec, fontWeight:400 }}>(optional)</span></div>
-                <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>Accessories that can be left out. If someone can't have one, it's just omitted and the recipe still works.</div>
-                <textarea placeholder={"3 cloves garlic\n1 onion\ncilantro"} value={addForm.secondaryText} onChange={e => setAddForm(p => ({ ...p, secondaryText: e.target.value }))} rows={3} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, resize:"vertical", fontFamily:"inherit" }} />
-              </div>
-              <div>
-                <div style={{ fontSize:11, color:COLORS.text, marginBottom:2, fontWeight:700 }}>Instructions <span style={{ color:COLORS.textSec, fontWeight:400 }}>(optional)</span></div>
-                <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>Steps to make it. Shown when you're cooking the meal.</div>
-                <textarea placeholder={"1. Brown the chicken...\n2. Add the sauce and simmer 20 min...\n3. Serve over rice"} value={addForm.instructions} onChange={e => setAddForm(p => ({ ...p, instructions: e.target.value }))} rows={4} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, resize:"vertical", fontFamily:"inherit" }} />
-              </div>
-              <div style={{ display:"flex", gap:8 }}>
-                <Btn style={{ flex:1 }} onClick={saveRecipe} disabled={!addForm.name.trim() || !addForm.essentialText.trim()}>{editId ? "Save Changes" : "Save Recipe"}</Btn>
-                <Btn variant="ghost" onClick={closeForm}>Cancel</Btn>
-              </div>
-            </div>
-          </Card>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
