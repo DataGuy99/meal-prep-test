@@ -645,11 +645,17 @@ function shuffleSides(day, meal, recipes, plan, settings, activePersonIds = null
   const now = Date.now();
   const slot = plan[day]?.[meal];
   const mains = slotMains(slot, recipes);
-  const currentSides = slotSides(slot, recipes);
-  const howMany = currentSides.length;
-  if (howMany === 0) return plan; // nothing to shuffle
+  const allSides = slotSides(slot, recipes);
+  // Locked sides stay exactly as they are; only the unlocked ones get reshuffled.
+  const lockedSides = allSides.filter(e => e.locked);
+  const unlockedSides = allSides.filter(e => !e.locked);
+  const howMany = unlockedSides.length;
+  if (howMany === 0) return plan; // nothing unlocked to shuffle
 
-  const currentSideIds = new Set(currentSides.map(e => e.recipeId));
+  // Exclude both the currently-shown unlocked sides AND the locked ones, so a
+  // new pick is genuinely different and never duplicates a kept side.
+  const excludeIds = new Set([...unlockedSides, ...lockedSides].map(e => e.recipeId));
+  const currentUnlockedIds = new Set(unlockedSides.map(e => e.recipeId));
   const comp = (settings.mealComposition || {})[meal] || {};
   const preferredSideTags = new Set(comp.sideTags || []);
 
@@ -657,21 +663,21 @@ function shuffleSides(day, meal, recipes, plan, settings, activePersonIds = null
     if (r.quarantine) return false;
     if ((r.role || "main") !== "side") return false;
     if (!(r.mealTags || []).includes(mealKey)) return false;
+    if (lockedSides.some(e => e.recipeId === r.id)) return false; // never re-pick a locked side
     if (!qualifyRecipe(r, settings.excludes, activePersonIds, now, settings.maxOmissions).qualified) return false;
     return true;
   });
 
-  // Prefer brand-new sides (not the ones currently shown), but if the pool is
-  // too small to fill the count without reuse, allow the current ones back in.
   const pickSides = [];
   const used = new Set();
   let guard = 0;
   while (pickSides.length < howMany && guard < 40) {
     guard++;
-    const avoid = pickSides.length + (sidePool.length - currentSideIds.size) >= howMany; // can we still avoid current?
+    // Can we still avoid the current unlocked sides and fill the count?
+    const avoid = pickSides.length + (sidePool.length - currentUnlockedIds.size) >= howMany;
     const candidates = sidePool.filter(r => {
       if (used.has(r.id)) return false;
-      if (avoid && currentSideIds.has(r.id)) return false;
+      if (avoid && currentUnlockedIds.has(r.id)) return false;
       return true;
     }).map(r => {
       let w = calcWeight(r, settings, {}, activePersonIds);
@@ -691,7 +697,8 @@ function shuffleSides(day, meal, recipes, plan, settings, activePersonIds = null
 
   const newPlan = JSON.parse(JSON.stringify(plan));
   const mainEntries = mains.map(e => ({ recipeId: e.recipeId, recipeName: e.recipeName, role: "main", ...(e.cooked ? { cooked: e.cooked, cookedAt: e.cookedAt } : {}) }));
-  newPlan[day][meal] = { ...slot, entries: [...mainEntries, ...pickSides] };
+  // Order: mains, then kept (locked) sides, then the freshly shuffled sides.
+  newPlan[day][meal] = { ...slot, entries: [...mainEntries, ...lockedSides, ...pickSides] };
   return newPlan;
 }
 
@@ -1795,6 +1802,20 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
     setPlan(newPlan);
   }
 
+  // Lock/unlock a single entry (used for sides) so Shuffle sides keeps it.
+  function toggleEntryLock(day, meal, recipeId) {
+    setPlan(prev => {
+      const next = JSON.parse(JSON.stringify(prev));
+      const slot = next[day]?.[meal];
+      if (!slot) return next;
+      const entries = slotEntries(slot).map(e =>
+        e.recipeId === recipeId ? { ...e, locked: !e.locked } : e
+      );
+      next[day][meal] = { ...slot, entries, recipeId: undefined, recipeName: undefined };
+      return next;
+    });
+  }
+
   function toggleLock(day, meal) {
     setPlan(prev => {
       const next = JSON.parse(JSON.stringify(prev));
@@ -2108,8 +2129,11 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
         const comp = (settings.mealComposition || {})[selectedSlot.meal] || { mainsMin:1, mainsMax:2, sidesMin:0, sidesMax:2 };
 
         const EntryRow = (e, kind) => (
-          <div key={e.recipeId} style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 8px", borderRadius:6, background:"#fff", border:`1px solid ${COLORS.border}`, marginBottom:4 }}>
+          <div key={e.recipeId} style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 8px", borderRadius:6, background:e.locked?COLORS.surface:"#fff", border:`1px solid ${e.locked?COLORS.lock:COLORS.border}`, marginBottom:4 }}>
             <span style={{ flex:1, fontSize:13, fontWeight:kind==="main"?600:500, color:kind==="main"?COLORS.text:COLORS.textSec, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.recipeName}</span>
+            {kind==="side" && !cooked && (
+              <span onClick={() => toggleEntryLock(selectedSlot.day, selectedSlot.meal, e.recipeId)} title={e.locked?"Locked — kept when shuffling":"Lock this side"} style={{ fontSize:12, cursor:"pointer", color:e.locked?COLORS.lock:COLORS.textSec, opacity:e.locked?1:0.5 }}>{e.locked?"🔒":"🔓"}</span>
+            )}
             <span onClick={() => { const rec = recipes.find(r => r.id === e.recipeId); if (rec) setViewRecipe(rec); }} style={{ fontSize:11, color:COLORS.primary, cursor:"pointer", fontWeight:600 }}>View</span>
             {!cooked && <span onClick={() => removeEntry(selectedSlot.day, selectedSlot.meal, e.recipeId)} style={{ fontSize:14, color:COLORS.textSec, cursor:"pointer" }}>×</span>}
           </div>
