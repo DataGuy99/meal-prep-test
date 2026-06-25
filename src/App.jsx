@@ -3326,14 +3326,35 @@ function DataSection() {
 // One-time heal for recipes imported before the paste-artifact stripper existed:
 // strip checkbox/bullet glyphs from each stored ingredient name. Re-normalizes
 // so names match for shopping/merge. Leaves everything else untouched.
+// One-time heal for recipes imported before the paste-artifact stripper and
+// proper segmentation existed. Two repairs per ingredient:
+//   1. Strip checkbox/bullet glyphs from the name.
+//   2. If the quantity/unit got baked into the name (a bad paste left
+//      qty at the default 1 while the name still starts with a number, e.g.
+//      name "12 eggs" or "260 g lotus root"), re-parse to split qty / unit /
+//      item into their proper fields — so the recipe card shows the real
+//      amount and the shopping list sums correctly.
 function cleanRecipes(arr) {
   if (!Array.isArray(arr)) return [];
+  const startsWithQty = (s) => /^\s*[\d.\/]+\s/.test(s);
   return arr.map(r => {
     if (!r || !Array.isArray(r.ingredients)) return r;
     let changed = false;
     const ingredients = r.ingredients.map(ing => {
       if (!ing || typeof ing.name !== "string") return ing;
-      const cleaned = normalize(stripArtifacts(ing.name));
+      const stripped = stripArtifacts(ing.name);
+      // Re-segment only when qty was never captured (default 1, no unit) and the
+      // name still carries a leading number — i.e. a compound string from a bad
+      // paste. Never touch ingredients that already have a real qty/unit.
+      const looksCompound = (ing.qty == null || ing.qty === 1) && !ing.unit && startsWithQty(stripped);
+      if (looksCompound) {
+        const parsed = parseIngredientLine(stripped);
+        if (parsed && (parsed.qty !== 1 || parsed.unit)) {
+          changed = true;
+          return { ...ing, qty: parsed.qty, unit: parsed.unit, name: parsed.name };
+        }
+      }
+      const cleaned = normalize(stripped);
       if (cleaned !== ing.name) { changed = true; return { ...ing, name: cleaned }; }
       return ing;
     });
