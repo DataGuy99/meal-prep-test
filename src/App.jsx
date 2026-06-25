@@ -3310,9 +3310,15 @@ function DataSection() {
 // ============================================================
 // Starter food tags seeded on first run — all neutral (50) so there's no
 // hidden food-type bias. The first-open survey lets the user nudge these.
+// Midpoint of the 0–100 tag-preference scale; the default weight a tag has
+// before the user nudges it. Referenced by TagPrefBadge and seeded into
+// DEFAULT_SETTINGS.tagWeights. (Its absence was the "NEUTRAL_WEIGHT is not
+// defined" crash when expanding any recipe with tags.)
+const NEUTRAL_WEIGHT = 50;
+
 const STARTER_TAGS = ["beef", "poultry", "fish", "eggs", "salad", "pasta", "grain", "vegetarian"];
 const DEFAULT_SETTINGS = {
-  tagWeights: Object.fromEntries(STARTER_TAGS.map(t => [t, 50])),
+  tagWeights: Object.fromEntries(STARTER_TAGS.map(t => [t, NEUTRAL_WEIGHT])),
   // Neutral heaviness (center 70 ± 20) for every meal — no built-in bias.
   mealTargets: { Breakfast:{ min:50, max:90 }, Lunch:{ min:50, max:90 }, Dinner:{ min:50, max:90 } },
   // How many mains and sides each meal type can hold. The generator fills up to
