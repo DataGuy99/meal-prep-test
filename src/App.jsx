@@ -242,16 +242,25 @@ function canonicalizeTag(input, knownTags) {
   return findMatch(input, knownTags, 2);
 }
 
+// Remove paste artifacts from copied recipe text: checkbox glyphs (every common
+// variant — ballot boxes, white/black squares, rounded squares, large squares,
+// emoji checkboxes), bullets, and leading list markers. Used both when parsing a
+// fresh paste and to clean already-stored ingredient names at display time.
+const ARTIFACT_GLYPHS = /[\u2610\u2611\u2612\u2022\u25AA\u25CF\u25E6\u2043\u2219\u00B7\u2024\u2027\u2756\u2666\u25C6\u274F\u2751\u2752\u25A0\u25A1\u25A2\u25A3\u25FB\u25FC\u25FD\u25FE\u2B1B\u2B1C\u2610\u2611\u2612\u{1F532}\u{1F533}\u25AB\u25FD\u25FE\u2587]/gu;
+function stripArtifacts(s) {
+  if (typeof s !== "string") return s == null ? "" : String(s);
+  return s
+    .replace(ARTIFACT_GLYPHS, " ")
+    // Leading list markers / dashes / residual box-like chars at line start.
+    .replace(/^[\s\-–—*▢□☐■●○◦‣·•◻◽⬜⬛]+/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function parseIngredientLine(line) {
   line = line.trim();
   if (!line) return null;
-  // Strip paste artifacts: checkbox glyphs, bullets, and leading list markers
-  // that come along when copy-pasting recipes from websites.
-  line = line
-    .replace(/[\u2610\u2611\u2612\u25A1\u25A0\u2022\u25AA\u25CF\u25E6\u2043\u2219\u00B7\u2024\u2027\u2756\u2666\u25C6\u274F\u2751\u2752]/g, " ")
-    .replace(/^[\s\-–—*▢□☐■●○◦‣·]+/, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  line = stripArtifacts(line);
   if (!line) return null;
   const m = line.match(/^([\d.\/]+)\s*(g|kg|oz|lb|lbs?|ml|l|cups?|tbsp|tsp|cans?|bottles?|bags?|heads?|pcs?|pieces?|bunch|bunches?|cloves?|stalks?|blocks?|fillets?|slices?)?\s+(.+)$/i);
   if (m) {
@@ -1451,7 +1460,7 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
                     const isRed = settings.redList.some(rl => normalize(rl) === normalize(ing.name));
                     return (
                       <span key={idx} style={{ fontSize:12, padding:"3px 8px", borderRadius:4, background:isRed?COLORS.quarantineBg:"#fff", border:`1px solid ${isRed?COLORS.quarantine:COLORS.border}`, color:isRed?COLORS.quarantine:COLORS.text, fontWeight:isRed?600:400 }}>
-                        {isRed && "⚠ "}{ing.qty > 0 && ing.qty !== 1 ? ing.qty + " " : ""}{ing.unit ? ing.unit + " " : ""}{ing.name}
+                        {isRed && "⚠ "}{ing.qty > 0 && ing.qty !== 1 ? ing.qty + " " : ""}{ing.unit ? ing.unit + " " : ""}{stripArtifacts(ing.name)}
                       </span>
                     );
                   };
@@ -3314,6 +3323,24 @@ function DataSection() {
 // before the user nudges it. Referenced by TagPrefBadge and seeded into
 // DEFAULT_SETTINGS.tagWeights. (Its absence was the "NEUTRAL_WEIGHT is not
 // defined" crash when expanding any recipe with tags.)
+// One-time heal for recipes imported before the paste-artifact stripper existed:
+// strip checkbox/bullet glyphs from each stored ingredient name. Re-normalizes
+// so names match for shopping/merge. Leaves everything else untouched.
+function cleanRecipes(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.map(r => {
+    if (!r || !Array.isArray(r.ingredients)) return r;
+    let changed = false;
+    const ingredients = r.ingredients.map(ing => {
+      if (!ing || typeof ing.name !== "string") return ing;
+      const cleaned = normalize(stripArtifacts(ing.name));
+      if (cleaned !== ing.name) { changed = true; return { ...ing, name: cleaned }; }
+      return ing;
+    });
+    return changed ? { ...r, ingredients } : r;
+  });
+}
+
 const NEUTRAL_WEIGHT = 50;
 
 const STARTER_TAGS = ["beef", "poultry", "fish", "eggs", "salad", "pasta", "grain", "vegetarian"];
@@ -3400,7 +3427,7 @@ function FirstRunSurvey({ settings, setSettings, onClose }) {
 
 export default function App() {
   const [tab, setTab] = useState("Recipes");
-  const [recipes, setRecipesRaw] = useState(() => dedupeById(load("recipes", [])));
+  const [recipes, setRecipesRaw] = useState(() => cleanRecipes(dedupeById(load("recipes", []))));
   const [pantry, setPantryRaw] = useState(() => dedupeById(load("pantry", [])));
   const [plan, setPlanRaw] = useState(() => load("plan", emptyPlan()));
   const [settings, setSettingsRaw] = useState(() => mergeSettings(load("settings", DEFAULT_SETTINGS)));
