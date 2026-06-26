@@ -712,16 +712,34 @@ const UNIT_CONV = {
   kg:  { family: "mass",   factor: 1000 },
   oz:  { family: "mass",   factor: 28.3495 },
   lb:  { family: "mass",   factor: 453.592 },
+  lbs: { family: "mass",   factor: 453.592 },
   ml:  { family: "volume", factor: 1 },
   l:   { family: "volume", factor: 1000 },
   tsp: { family: "volume", factor: 4.92892 },
   tbsp:{ family: "volume", factor: 14.7868 },
   cup: { family: "volume", factor: 236.588 },
+  // Count units all share ONE "count" family with a multiplier to single units,
+  // so "dozen" and bare eggs are the SAME thing at different scales: 1 dozen = 12.
+  dozen:  { family: "count", factor: 12 },
+  doz:    { family: "count", factor: 12 },
+  dz:     { family: "count", factor: 12 },
+  pair:   { family: "count", factor: 2 },
+  pairs:  { family: "count", factor: 2 },
 };
 
+// Plain count labels that mean "1 single unit" — eggs, onions, etc. counted one
+// at a time. These all map to the count family with factor 1, so they unify with
+// dozen/pair (and with each other: "pcs", "whole", "each" are interchangeable).
+const PLAIN_COUNT_LABELS = new Set(["", "pc", "pcs", "piece", "pieces", "whole", "each", "ct", "count", "unit", "units", "head", "heads", "clove", "cloves", "stalk", "stalks", "slice", "slices", "can", "cans", "bag", "bags", "bottle", "bottles", "bunch", "bunches", "block", "blocks", "fillet", "fillets"]);
+
 function unitInfo(unit) {
-  const u = (unit || "").toLowerCase();
-  return UNIT_CONV[u] || { family: "count:" + u, factor: 1 };
+  const u = (unit || "").toLowerCase().trim();
+  if (UNIT_CONV[u]) return UNIT_CONV[u];
+  // Plain count labels (eggs, pcs, whole, cloves, cans...) unify into one count
+  // family at factor 1, so they convert with dozen/pair and with each other.
+  if (PLAIN_COUNT_LABELS.has(u)) return { family: "count", factor: 1 };
+  // Anything else stays its own isolated unit so unlike things don't merge.
+  return { family: "count:" + u, factor: 1 };
 }
 
 // Pick a human-friendly display unit + value from a base quantity in a family.
@@ -1687,27 +1705,22 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
       const pItem = findPantryMatch(ing.name);
       if (pItem) {
         const info = unitInfo(ing.unit), pInfo = unitInfo(pItem.unit);
-        const ingIsCount = info.family.startsWith("count:");
-        const panIsCount = pInfo.family.startsWith("count:");
-        // Deduct when units share a family OR either side is a plain count.
-        // Countable items (eggs, onions) are fungible regardless of the exact
-        // count label ("pcs" vs unlabeled), so "2 eggs" deducts 2 from a pantry
-        // egg stocked as "pcs"/"whole"/unlabeled. Only block when BOTH sides are
-        // real measurement families that can't convert (e.g. cups vs grams).
-        const compatible = info.family === pInfo.family || ingIsCount || panIsCount;
-        if (compatible) {
-          let deduct, after;
-          if (info.family === pInfo.family && !ingIsCount) {
-            // Same real-measurement family: convert precisely.
-            const deductBase = need * info.factor;
-            const haveBase = pItem.qty * pInfo.factor;
-            deduct = round1(deductBase / pInfo.factor);
-            after = round1(Math.max(0, haveBase - deductBase) / pInfo.factor);
-          } else {
-            // Count-based (or mixed): deduct the raw needed amount (an egg is an egg).
-            deduct = round1(need);
-            after = round1(Math.max(0, pItem.qty - need));
-          }
+        // Two count families unify even when one is generic "count" and the
+        // other an isolated "count:x" — fall back to treating both as singles.
+        const bothCountish = info.family.startsWith("count") && pInfo.family.startsWith("count");
+        const sameFamily = info.family === pInfo.family;
+        if (sameFamily || bothCountish) {
+          // Convert the needed amount to base units using the recipe unit's
+          // factor, then express the deduction in the PANTRY unit via its factor.
+          // Works uniformly for mass (g), volume (ml), and count (singles):
+          // "4 eggs" = 4 base; pantry "2 dozen" = 24 base; deduct 4 -> 20 base
+          // = 1.67 dozen.
+          const rFactor = sameFamily ? info.factor : 1;   // if not same family, both are singles
+          const pFactor = sameFamily ? pInfo.factor : (PLAIN_COUNT_LABELS.has((pItem.unit||"").toLowerCase().trim()) ? 1 : pInfo.factor);
+          const needBase = need * rFactor;
+          const haveBase = pItem.qty * pFactor;
+          const deduct = round1(needBase / pFactor);
+          const after = round1(Math.max(0, haveBase - needBase) / pFactor);
           tracked.push({ id: pItem.id, name: ing.name, unit: pItem.unit, deduct, have: pItem.qty, after });
         } else {
           untracked.push({ name: ing.name, reason: "unit mismatch", qty: need, unit: ing.unit });
@@ -1761,24 +1774,22 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
         setIngredientLinks(links => ({ ...links, [normalize(u.name)]: pantryItem.id }));
       }
       const info = unitInfo(u.unit), pInfo = unitInfo(pantryItem.unit);
-      const ingIsCount = info.family.startsWith("count:");
-      const panIsCount = pInfo.family.startsWith("count:");
+      const bothCountish = info.family.startsWith("count") && pInfo.family.startsWith("count");
+      const sameFamily = info.family === pInfo.family;
       let line;
-      if (info.family === pInfo.family && !ingIsCount) {
-        // Same real-measurement family: convert precisely.
-        const deductBase = (u.qty || 1) * info.factor;
-        const haveBase = pantryItem.qty * pInfo.factor;
+      if (sameFamily || bothCountish) {
+        const need = u.qty || 1;
+        const rFactor = sameFamily ? info.factor : 1;
+        const pFactor = sameFamily ? pInfo.factor : (PLAIN_COUNT_LABELS.has((pantryItem.unit||"").toLowerCase().trim()) ? 1 : pInfo.factor);
+        const needBase = need * rFactor;
+        const haveBase = pantryItem.qty * pFactor;
         line = {
           id: pantryItem.id, name: u.name, unit: pantryItem.unit,
-          deduct: round1(deductBase / pInfo.factor),
+          deduct: round1(needBase / pFactor),
           have: pantryItem.qty,
-          after: round1(Math.max(0, haveBase - deductBase) / pInfo.factor),
+          after: round1(Math.max(0, haveBase - needBase) / pFactor),
           manual: true,
         };
-      } else if (ingIsCount || panIsCount) {
-        // Count-based (or mixed): deduct the raw needed amount.
-        const need = u.qty || 1;
-        line = { id: pantryItem.id, name: u.name, unit: pantryItem.unit, deduct: round1(need), have: pantryItem.qty, after: round1(Math.max(0, pantryItem.qty - need)), manual: true };
       } else {
         // Two different real-measurement families (e.g. cups vs grams) — link
         // without a numeric deduction rather than guess a conversion.
