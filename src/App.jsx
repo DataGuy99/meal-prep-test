@@ -1609,6 +1609,7 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
   const [pickerSlot, setPickerSlot] = useState(null);
   const [pickerSearch, setPickerSearch] = useState("");
   const [cookModal, setCookModal] = useState(null); // { day, meal, recipe, lines, spices, untracked }
+  const [attachTarget, setAttachTarget] = useState(null); // index of untracked item being attached to a pantry item
   const [viewRecipe, setViewRecipe] = useState(null); // recipe object to show full guidance
   const [genMsg, setGenMsg] = useState("");
 
@@ -1630,6 +1631,43 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
   })();
 
   // Build the consumption breakdown for a recipe at the current scale.
+  // Match an ingredient name to a pantry item, progressively loosening:
+  //   1. exact normalized match
+  //   2. base name with parentheticals / trailing qualifiers stripped
+  //      ("lotus root (9.2 oz)" -> "lotus root"; "soy sauce, sempio brand" -> "soy sauce")
+  //   3. substring either way (pantry "soy sauce" inside ingredient "soy sauce, sempio")
+  // Returns the pantry item or null.
+  function findPantryMatch(ingName) {
+    const ni = normalize(ingName);
+    let m = pantry.find(p => normalize(p.name) === ni);
+    if (m) return m;
+    // Strip parentheticals and anything after a comma/dash qualifier.
+    const base = normalize(
+      String(ingName)
+        .replace(/\([^)]*\)/g, " ")     // remove (9.2 oz), (3 cups), etc.
+        .split(/[,–—-]/)[0]             // take part before a comma/dash qualifier
+        .trim()
+    );
+    if (base && base !== ni) {
+      m = pantry.find(p => normalize(p.name) === base);
+      if (m) return m;
+    }
+    // Substring match both directions, on the base name (longest pantry match wins
+    // so "brown sugar" beats "sugar" when both are present).
+    const key = base || ni;
+    if (key) {
+      const subs = pantry.filter(p => {
+        const np = normalize(p.name);
+        return np === key || np.includes(key) || key.includes(np);
+      });
+      if (subs.length) {
+        subs.sort((a, b) => normalize(b.name).length - normalize(a.name).length);
+        return subs[0];
+      }
+    }
+    return null;
+  }
+
   function buildCookLines(recipe) {
     const factor = scaleFor(recipe);
     const tracked = [], spices = [], untracked = [];
@@ -1637,7 +1675,7 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
       const cat = guessCategory(ing.name);
       if (cat === "Spices") { spices.push(ing.name); continue; }
       const need = (ing.qty || 1) * factor;
-      const pItem = pantry.find(p => normalize(p.name) === normalize(ing.name));
+      const pItem = findPantryMatch(ing.name);
       if (pItem) {
         const info = unitInfo(ing.unit), pInfo = unitInfo(pItem.unit);
         // Only deduct if units share a family; otherwise treat as untracked-unit.
@@ -1652,10 +1690,10 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
             after: round1(Math.max(0, afterBase) / pInfo.factor),
           });
         } else {
-          untracked.push({ name: ing.name, reason: "unit mismatch" });
+          untracked.push({ name: ing.name, reason: "unit mismatch", qty: need, unit: ing.unit });
         }
       } else {
-        untracked.push({ name: ing.name, reason: "not in pantry" });
+        untracked.push({ name: ing.name, reason: "not in pantry", qty: need, unit: ing.unit });
       }
     }
     return { factor, tracked, spices, untracked };
@@ -1688,6 +1726,40 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
     return { factor, tracked: Object.values(trackedById), spices: [...spices], untracked };
   }
 
+  // Manually attach an untracked cook-ingredient to a chosen pantry item: move
+  // it out of `untracked` and into `tracked` with a computed deduction, so
+  // confirming the cook will deduct it. Only deducts when units are compatible;
+  // otherwise deducts nothing but still links (qty unknown across unit families).
+  function attachToPantry(untrackedIndex, pantryItem) {
+    setCookModal(prev => {
+      if (!prev) return prev;
+      const u = prev.untracked[untrackedIndex];
+      if (!u) return prev;
+      const info = unitInfo(u.unit), pInfo = unitInfo(pantryItem.unit);
+      let line;
+      if (info.family === pInfo.family) {
+        const deductBase = (u.qty || 1) * info.factor;
+        const haveBase = pantryItem.qty * pInfo.factor;
+        line = {
+          id: pantryItem.id, name: u.name, unit: pantryItem.unit,
+          deduct: round1(deductBase / pInfo.factor),
+          have: pantryItem.qty,
+          after: round1(Math.max(0, haveBase - deductBase) / pInfo.factor),
+          manual: true,
+        };
+      } else {
+        // Units don't convert — link without a numeric deduction.
+        line = { id: pantryItem.id, name: u.name, unit: pantryItem.unit, deduct: 0, have: pantryItem.qty, after: pantryItem.qty, manual: true, note: "units differ" };
+      }
+      return {
+        ...prev,
+        tracked: [...prev.tracked, line],
+        untracked: prev.untracked.filter((_, i) => i !== untrackedIndex),
+      };
+    });
+    setAttachTarget(null);
+  }
+
   function applyCook(day, meal, recipe, lines) {
     // Decrement tracked pantry items.
     setPantry(prev => prev.map(p => {
@@ -1706,6 +1778,7 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
       return next;
     });
     setCookModal(null);
+    setAttachTarget(null);
     setSelectedSlot(null);
   }
 
@@ -2270,21 +2343,45 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
               <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
                 {cookModal.tracked.map((l, i) => (
                   <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", borderRadius:6, background:COLORS.surface }}>
-                    <span style={{ flex:1, fontSize:13, fontWeight:600 }}>{l.name}</span>
-                    <span style={{ fontSize:12, color:COLORS.red, fontWeight:600 }}>−{l.deduct} {l.unit}</span>
-                    <span style={{ fontSize:11, color:COLORS.textSec }}>{l.have}→{l.after}</span>
+                    <span style={{ flex:1, fontSize:13, fontWeight:600 }}>{l.name}{l.manual && <span style={{ fontSize:10, color:COLORS.gold, marginLeft:5 }}>linked</span>}</span>
+                    {l.note ? (
+                      <span style={{ fontSize:11, color:COLORS.textSec }}>{l.note}</span>
+                    ) : (
+                      <>
+                        <span style={{ fontSize:12, color:COLORS.red, fontWeight:600 }}>−{l.deduct} {l.unit}</span>
+                        <span style={{ fontSize:11, color:COLORS.textSec }}>{l.have}→{l.after}</span>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
             </>}
 
             {cookModal.untracked.length > 0 && <>
-              <SectionLabel>Not tracked</SectionLabel>
-              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+              <SectionLabel>Not tracked — tap to link to a pantry item</SectionLabel>
+              <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
                 {cookModal.untracked.map((u, i) => (
-                  <span key={i} style={{ fontSize:12, padding:"4px 8px", borderRadius:5, background:"#fff", border:`1px solid ${COLORS.border}`, color:COLORS.textSec }}>
-                    {u.name} <span style={{ fontSize:10 }}>({u.reason})</span>
-                  </span>
+                  <div key={i}>
+                    <div onClick={() => setAttachTarget(attachTarget === i ? null : i)} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderRadius:6, background:"#fff", border:`1px solid ${attachTarget===i?COLORS.gold:COLORS.border}`, cursor:"pointer" }}>
+                      <span style={{ flex:1, fontSize:13, color:COLORS.text }}>{u.name}</span>
+                      <span style={{ fontSize:10, color:COLORS.textSec }}>{u.reason}</span>
+                      <span style={{ fontSize:12, color:COLORS.gold, fontWeight:600 }}>{attachTarget===i ? "▲" : "+ link"}</span>
+                    </div>
+                    {attachTarget === i && (
+                      <div style={{ marginTop:4, marginLeft:8, padding:"8px", borderRadius:6, background:COLORS.surface, maxHeight:160, overflowY:"auto" }}>
+                        {pantry.length === 0 ? (
+                          <div style={{ fontSize:12, color:COLORS.textSec, padding:"4px 6px" }}>No pantry items yet. Add items in the Pantry tab.</div>
+                        ) : (
+                          [...pantry].sort((a,b) => a.name.localeCompare(b.name)).map(p => (
+                            <div key={p.id} onClick={() => attachToPantry(i, p)} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 8px", borderRadius:5, cursor:"pointer", fontSize:13 }}>
+                              <span style={{ flex:1 }}>{p.name}</span>
+                              <span style={{ fontSize:11, color:COLORS.textSec }}>{p.qty} {prettyUnit(p.unit, p.qty)}</span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
             </>}
