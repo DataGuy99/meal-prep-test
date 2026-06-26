@@ -1687,17 +1687,28 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
       const pItem = findPantryMatch(ing.name);
       if (pItem) {
         const info = unitInfo(ing.unit), pInfo = unitInfo(pItem.unit);
-        // Only deduct if units share a family; otherwise treat as untracked-unit.
-        if (info.family === pInfo.family) {
-          const deductBase = need * info.factor;
-          const haveBase = pItem.qty * pInfo.factor;
-          const afterBase = haveBase - deductBase;
-          tracked.push({
-            id: pItem.id, name: ing.name, unit: pItem.unit,
-            deduct: round1(deductBase / pInfo.factor),
-            have: pItem.qty,
-            after: round1(Math.max(0, afterBase) / pInfo.factor),
-          });
+        const ingIsCount = info.family.startsWith("count:");
+        const panIsCount = pInfo.family.startsWith("count:");
+        // Deduct when units share a family OR either side is a plain count.
+        // Countable items (eggs, onions) are fungible regardless of the exact
+        // count label ("pcs" vs unlabeled), so "2 eggs" deducts 2 from a pantry
+        // egg stocked as "pcs"/"whole"/unlabeled. Only block when BOTH sides are
+        // real measurement families that can't convert (e.g. cups vs grams).
+        const compatible = info.family === pInfo.family || ingIsCount || panIsCount;
+        if (compatible) {
+          let deduct, after;
+          if (info.family === pInfo.family && !ingIsCount) {
+            // Same real-measurement family: convert precisely.
+            const deductBase = need * info.factor;
+            const haveBase = pItem.qty * pInfo.factor;
+            deduct = round1(deductBase / pInfo.factor);
+            after = round1(Math.max(0, haveBase - deductBase) / pInfo.factor);
+          } else {
+            // Count-based (or mixed): deduct the raw needed amount (an egg is an egg).
+            deduct = round1(need);
+            after = round1(Math.max(0, pItem.qty - need));
+          }
+          tracked.push({ id: pItem.id, name: ing.name, unit: pItem.unit, deduct, have: pItem.qty, after });
         } else {
           untracked.push({ name: ing.name, reason: "unit mismatch", qty: need, unit: ing.unit });
         }
@@ -1750,8 +1761,11 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
         setIngredientLinks(links => ({ ...links, [normalize(u.name)]: pantryItem.id }));
       }
       const info = unitInfo(u.unit), pInfo = unitInfo(pantryItem.unit);
+      const ingIsCount = info.family.startsWith("count:");
+      const panIsCount = pInfo.family.startsWith("count:");
       let line;
-      if (info.family === pInfo.family) {
+      if (info.family === pInfo.family && !ingIsCount) {
+        // Same real-measurement family: convert precisely.
         const deductBase = (u.qty || 1) * info.factor;
         const haveBase = pantryItem.qty * pInfo.factor;
         line = {
@@ -1761,8 +1775,13 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
           after: round1(Math.max(0, haveBase - deductBase) / pInfo.factor),
           manual: true,
         };
+      } else if (ingIsCount || panIsCount) {
+        // Count-based (or mixed): deduct the raw needed amount.
+        const need = u.qty || 1;
+        line = { id: pantryItem.id, name: u.name, unit: pantryItem.unit, deduct: round1(need), have: pantryItem.qty, after: round1(Math.max(0, pantryItem.qty - need)), manual: true };
       } else {
-        // Units don't convert — link without a numeric deduction.
+        // Two different real-measurement families (e.g. cups vs grams) — link
+        // without a numeric deduction rather than guess a conversion.
         line = { id: pantryItem.id, name: u.name, unit: pantryItem.unit, deduct: 0, have: pantryItem.qty, after: pantryItem.qty, manual: true, note: "units differ" };
       }
       return {
