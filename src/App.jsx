@@ -262,6 +262,7 @@ function parseIngredientLine(line) {
   if (!line) return null;
   line = stripArtifacts(line);
   if (!line) return null;
+  if (isSectionHeader(line)) return null; // "For the sauce:", "garnish", etc. aren't ingredients
   const m = line.match(/^([\d.\/]+)\s*(g|kg|oz|lb|lbs?|ml|l|cups?|tbsp|tsp|cans?|bottles?|bags?|heads?|pcs?|pieces?|bunch|bunches?|cloves?|stalks?|blocks?|fillets?|slices?)?\s+(.+)$/i);
   if (m) {
     let qty = m[1].includes("/") ? m[1].split("/").reduce((a,b) => a/b) : parseFloat(m[1]);
@@ -787,7 +788,120 @@ const MERGE_NOISE = [
   "as needed", "if needed", "optional", "or as needed",
   "a little", "some", "a bit of", "a handful of", "handful of",
 ];
+
+// Prep/state descriptors that don't change WHAT to buy — stripped from the
+// canonical name so "carrots, julienned" and "carrots, grated" merge to carrot.
+// Matched as whole words anywhere in the name.
+const PREP_DESCRIPTORS = [
+  "julienned", "julienne", "minced", "chopped", "finely chopped", "roughly chopped",
+  "diced", "finely diced", "sliced", "thinly sliced", "grated", "shredded",
+  "crushed", "ground", "peeled", "deseeded", "seeded", "cored", "trimmed",
+  "halved", "quartered", "cubed", "mashed", "beaten", "whisked", "melted",
+  "softened", "room temperature", "chilled", "cold", "warm", "hot", "lukewarm",
+  "fresh", "freshly", "dried", "frozen", "thawed", "cooked", "uncooked", "raw",
+  "divided", "plus more", "plus extra", "for frying", "for drizzling",
+  "for serving", "for brushing", "for greasing", "for dusting", "rinsed",
+  "drained", "washed", "patted dry", "at room temperature", "lightly packed",
+  "packed", "level", "heaped", "heaping", "sifted", "toasted", "roasted",
+  "store bought", "store-bought", "homemade", "large", "medium", "small", "extra large",
+];
+
+// Variant → base canonical name. The curated exceptions: different shelf labels
+// for the same shopping item collapse to one. Applied to the fully-normalized
+// name. Order matters (longest/most-specific first not required since we match
+// the whole normalized string or a suffix). Add freely as new cases show up.
+const CANONICAL_BASE = [
+  // soy sauce family
+  [/^(low sodium|light|dark|reduced sodium|regular|all purpose|sweet|thick|premium|naturally brewed)?\s*soy sauce$/, "soy sauce"],
+  [/^(low sodium|light|dark)?\s*soy bean sauce$/, "soy sauce"],
+  // tofu
+  [/^(firm|extra firm|soft|silken|medium firm|pressed|momen|kinugoshi)?\s*tofu$/, "tofu"],
+  // olive oil
+  [/^(extra virgin|virgin|light|pure|refined)?\s*olive oil$/, "olive oil"],
+  // generic oils stay distinct, but "neutral cooking oil"/"vegetable oil for frying" -> vegetable oil
+  [/^(neutral|cooking|frying)?\s*(vegetable|canola|sunflower|rice bran|grapeseed)?\s*oil$/, "$2 oil"],
+  // sugar
+  [/^(granulated|white|caster|superfine|fine)?\s*sugar$/, "sugar"],
+  [/^(light|dark)?\s*brown sugar$/, "brown sugar"],
+  // salt
+  [/^(fine|coarse|kosher|sea|table|flaky|iodized)?\s*salt$/, "salt"],
+  // garlic
+  [/^garlic clove(s)?$/, "garlic"],
+  [/^clove(s)? garlic$/, "garlic"],
+  [/^(minced|crushed|grated)?\s*garlic$/, "garlic"],
+  // onion
+  [/^(yellow|white|red|brown|spanish|sweet)?\s*onion$/, "onion"],
+  // pepper (black) — keep distinct from bell/chili
+  [/^(freshly ground|ground|cracked|whole)?\s*black pepper$/, "black pepper"],
+  [/^(freshly ground|ground)?\s*white pepper$/, "white pepper"],
+  // flour
+  [/^(all purpose|plain|cake|bread|self raising|self-raising)?\s*flour$/, "flour"],
+  // water — collapse all water to one
+  [/^(cold|hot|warm|lukewarm|boiling|ice|iced|filtered|room temperature)?\s*water$/, "water"],
+  // butter
+  [/^(unsalted|salted|softened|melted)?\s*butter$/, "butter"],
+  // rice wine / mirin variants stay as "sweet rice wine (mirin)" -> mirin
+  [/^(sweet rice wine|rice wine|cooking wine|shaoxing wine|shaoxing)?\s*\(?mirin\)?$/, "mirin"],
+  // green onion / scallion synonyms
+  [/^(spring onion|scallion|green onion)s?$/, "green onion"],
+];
+
+// Recipe section headers that get pasted as if they were ingredients. Lines
+// that ARE one of these (or end with a colon) are dropped, not bought.
+const SECTION_HEADERS = new Set([
+  "for the sauce", "for the meat", "for the marinade", "for the dough",
+  "for the filling", "for the topping", "for the garnish", "for the batter",
+  "for the dressing", "for the soup", "for the base", "for the broth",
+  "for the seasoning", "for serving", "for the dipping sauce", "for the glaze",
+  "sauce", "marinade", "seasoning", "garnish", "topping", "filling", "dressing",
+  "dipping sauce", "soy dipping sauce", "for the coating", "to serve", "optional",
+  "for the rice", "for the noodles", "for the vegetables", "for the chicken",
+]);
+
+// Reduce a raw ingredient name to its canonical shopping identity.
+function canonicalName(raw) {
+  let n = normalize(raw);
+  if (!n) return n;
+  // Strip a leading quantity + optional unit baked into the name
+  // ("1/2 cup water" -> "water", "4 carrots" -> "carrot", "2 cloves garlic" -> "garlic").
+  n = n.replace(/^\s*[\d.\/]+\s*(?:g|kg|oz|lb|lbs?|ml|l|cups?|tbsp|tsp|cloves?|stalks?|slices?|pieces?|pcs?|cans?|bottles?|bags?|bunch(?:es)?|heads?|blocks?|fillets?|dozen|doz|pairs?)?\s+/i, "").trim();
+  // Drop parentheticals and "for the X" trailing qualifiers.
+  n = n.replace(/\([^)]*\)/g, " ");
+  n = n.replace(/\bfor the [a-z ]+$/i, " ");
+  // Remove prep descriptors as whole words.
+  for (const d of PREP_DESCRIPTORS) {
+    n = n.replace(new RegExp(`(^|[,\\s])${d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([,\\s]|$)`, "gi"), " ");
+  }
+  // Strip any noise terms too (to taste, pinch...).
+  for (const noise of MERGE_NOISE) {
+    n = n.replace(new RegExp(`(^|[,\\s])${noise.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([,\\s]|$)`, "gi"), " ");
+  }
+  // Collapse leftover commas/spaces.
+  n = n.replace(/[,]+/g, " ").replace(/\s+/g, " ").trim();
+  // Re-normalize remaining words (expose singulars).
+  n = n.split(" ").map(w => normalize(w)).filter(Boolean).join(" ");
+  // Apply canonical-base rewrites.
+  for (const [re, to] of CANONICAL_BASE) {
+    if (re.test(n)) { n = n.replace(re, to).replace(/\s+/g, " ").trim(); break; }
+  }
+  return n || normalize(raw);
+}
+
+// True if a pasted line is actually a section header, not an ingredient.
+function isSectionHeader(raw) {
+  const n = normalize(raw).replace(/[:]+$/, "").trim();
+  if (!n) return false;
+  if (SECTION_HEADERS.has(n)) return true;
+  // A short line ending in a colon in the original is a header ("Sauce:").
+  if (/:\s*$/.test(String(raw)) && String(raw).trim().split(/\s+/).length <= 4) return true;
+  return false;
+}
+
 function mergeKey(name) {
+  // Canonical name IS the merge key now — variants of the same item collapse.
+  return canonicalName(name);
+}
+function mergeKeyLegacy(name) {
   let k = normalize(name);
   for (const noise of MERGE_NOISE) {
     k = k.replace(new RegExp(`(^|[,\\s])${noise.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([,\\s]|$)`, "gi"), " ");
@@ -800,8 +914,10 @@ function mergeKey(name) {
 }
 
 function generateShoppingList(plan, recipes, pantry, excludes = [], activePersonIds = null, maxOmissions = Infinity) {
-  // Bucket needs by ingredient name + unit family. Within a family, sum in base units.
-  // needs[name] = { name, category, families: { [family]: baseQty } }
+  // Bucket needs by canonical name + unit family. Within a family, sum in base
+  // units. Also record `parts` — each original ingredient that merged in — so
+  // the UI can expand a line to show its composition.
+  // needs[key] = { name, category, families: {fam: base}, parts: {fam: [{label, qty, unit}]} }
   const needs = {};
   const now = Date.now();
   DAYS.forEach(d => MEALS.forEach(m => {
@@ -809,39 +925,62 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
     for (const entry of slotEntries(slot)) {
       const recipe = recipes.find(r => r.id === entry.recipeId);
       if (!recipe) continue;
-      // Omission (M): ingredients dropped for the active household shouldn't be
-      // bought. A qualifying recipe's omitted secondary ingredients are excluded
-      // from the shopping list.
       const qual = qualifyRecipe(recipe, excludes, activePersonIds, now, maxOmissions);
       const omittedSet = new Set(qual.omitted.map(n => normalize(n)));
       for (const ing of (recipe.ingredients || [])) {
         if (omittedSet.has(normalize(ing.name))) continue;
+        if (isSectionHeader(ing.name)) continue; // drop stray headers
         const key = mergeKey(ing.name);
-        if (!needs[key]) needs[key] = { name: stripLeadingQty(ing.name), category: guessCategory(ing.name), families: {} };
+        if (!key) continue;
+        if (!needs[key]) needs[key] = { name: key, category: guessCategory(ing.name), families: {}, parts: {} };
         const info = unitInfo(ing.unit);
         const base = (ing.qty || 1) * info.factor;
         needs[key].families[info.family] = (needs[key].families[info.family] || 0) + base;
+        // Record the original part for the expandable breakdown (only if it
+        // differs from the canonical name, so we don't show "onion: onion").
+        const origLabel = stripArtifacts(stripLeadingQty(ing.name));
+        if (!needs[key].parts[info.family]) needs[key].parts[info.family] = [];
+        needs[key].parts[info.family].push({
+          label: origLabel && normalize(origLabel) !== key ? origLabel : null,
+          qty: ing.qty || 1, unit: ing.unit || "",
+        });
       }
     }
   }));
 
   const items = [];
   for (const [key, need] of Object.entries(needs)) {
+    // Match a pantry item by canonical name so "2 dozen eggs" offsets recipe eggs.
     const pantryItem = pantry.find(p => mergeKey(p.name) === key);
 
     for (const [family, baseQty] of Object.entries(need.families)) {
       let remaining = baseQty;
+      let haveNote = "";
 
-      // Subtract pantry ONLY if the pantry item's unit is in the same family.
+      // Subtract what's already in the pantry. Count families unify (dozen vs
+      // singles), mass/volume convert within family.
       if (pantryItem && pantryItem.qty > 0) {
         const pInfo = unitInfo(pantryItem.unit);
-        if (pInfo.family === family) {
-          remaining -= pantryItem.qty * pInfo.factor;
+        const bothCount = family.startsWith("count") && pInfo.family.startsWith("count");
+        if (pInfo.family === family || bothCount) {
+          const haveBase = pantryItem.qty * (bothCount && pInfo.family !== family ? 1 : pInfo.factor);
+          remaining -= haveBase;
+          haveNote = `have ${pantryItem.qty}${pantryItem.unit ? " " + pantryItem.unit : ""}`;
         }
       }
 
       if (remaining > 0.01) {
         const disp = prettyUnit(family, remaining);
+        // Build composition: distinct original parts that merged into this line.
+        const rawParts = (need.parts[family] || []).filter(p => p.label);
+        const seen = new Set();
+        const composition = [];
+        for (const p of rawParts) {
+          const sig = p.label.toLowerCase() + "|" + p.qty + "|" + p.unit;
+          if (seen.has(sig)) continue;
+          seen.add(sig);
+          composition.push(p);
+        }
         items.push({
           name: need.name,
           qty: round1(disp.qty),
@@ -850,6 +989,8 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
           store: pantryItem?.store || "",
           checked: false,
           source: "plan",
+          haveNote,
+          composition: composition.length > 1 ? composition : [],
         });
       }
     }
@@ -2549,11 +2690,19 @@ function ShopTab({ plan, recipes, setRecipes, pantry, setPantry, spices, setSpic
   })();
   const excludes = settings?.excludes || [];
   const maxOmissions = settings?.maxOmissions ?? Infinity;
-  const [shopItems, setShopItems] = useState([]);
+  const [shopItems, setShopItemsRaw] = useState(() => load("shopItems", []));
+  // Persist the shopping list so leaving and returning keeps it — including
+  // checked-off items the user already bought.
+  const setShopItems = (v) => setShopItemsRaw(prev => {
+    const next = typeof v === "function" ? v(prev) : v;
+    save("shopItems", next);
+    return next;
+  });
   const [groupBy, setGroupBy] = useState("category");
   const [manualName, setManualName] = useState("");
   const [manualQty, setManualQty] = useState("");
-  const [generated, setGenerated] = useState(false);
+  const [generated, setGenerated] = useState(() => load("shopItems", []).length > 0);
+  const [expandedItem, setExpandedItem] = useState(null); // id of item showing its composition
   const [stockedMsg, setStockedMsg] = useState("");
   const [mergeMode, setMergeMode] = useState(false);
   const [mergeSel, setMergeSel] = useState([]);   // ids of items selected to merge
