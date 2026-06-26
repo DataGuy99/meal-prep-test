@@ -1604,7 +1604,7 @@ function SubstitutionRow({ qi, onResolve }) {
 // ============================================================
 // PLAN TAB
 // ============================================================
-function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPantry, people, spices, setSpices, setTab }) {
+function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPantry, people, spices, setSpices, setTab, ingredientLinks = {}, setIngredientLinks }) {
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [pickerSlot, setPickerSlot] = useState(null);
   const [pickerSearch, setPickerSearch] = useState("");
@@ -1639,12 +1639,21 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
   // Returns the pantry item or null.
   function findPantryMatch(ingName) {
     const ni = normalize(ingName);
+    // 1. Saved link wins — a name the user manually linked before maps straight
+    //    to its pantry item (survives forever, handles Korean names, brands, etc).
+    const linkedId = ingredientLinks[ni];
+    if (linkedId) {
+      const linked = pantry.find(p => p.id === linkedId);
+      if (linked) return linked;
+    }
     let m = pantry.find(p => normalize(p.name) === ni);
     if (m) return m;
-    // Strip parentheticals and anything after a comma/dash qualifier.
+    // Strip parentheticals, a leading quantity/unit, and anything after a
+    // comma/dash qualifier — leaving the core item name.
     const base = normalize(
       String(ingName)
         .replace(/\([^)]*\)/g, " ")     // remove (9.2 oz), (3 cups), etc.
+        .replace(/^\s*[\d.\/]+\s*(?:g|kg|oz|lb|lbs?|ml|l|cups?|tbsp|tsp|cloves?|stalks?|slices?|pieces?|pcs?|cans?|bunch(?:es)?|heads?)?\s+/i, "") // strip leading "260 g", "2 cloves", "12"
         .split(/[,–—-]/)[0]             // take part before a comma/dash qualifier
         .trim()
     );
@@ -1735,6 +1744,11 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
       if (!prev) return prev;
       const u = prev.untracked[untrackedIndex];
       if (!u) return prev;
+      // Remember this link forever, so future recipes with the same ingredient
+      // name auto-match this pantry item.
+      if (setIngredientLinks && u.name) {
+        setIngredientLinks(links => ({ ...links, [normalize(u.name)]: pantryItem.id }));
+      }
       const info = unitInfo(u.unit), pInfo = unitInfo(pantryItem.unit);
       let line;
       if (info.family === pInfo.family) {
@@ -2375,7 +2389,7 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
                           [...pantry].sort((a,b) => a.name.localeCompare(b.name)).map(p => (
                             <div key={p.id} onClick={() => attachToPantry(i, p)} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 8px", borderRadius:5, cursor:"pointer", fontSize:13 }}>
                               <span style={{ flex:1 }}>{p.name}</span>
-                              <span style={{ fontSize:11, color:COLORS.textSec }}>{p.qty} {prettyUnit(p.unit, p.qty)}</span>
+                              <span style={{ fontSize:11, color:COLORS.textSec }}>{p.qty}{p.unit ? " " + p.unit : ""}</span>
                             </div>
                           ))
                         )}
@@ -3641,7 +3655,7 @@ function FirstRunSurvey({ settings, setSettings, onClose }) {
 }
 
 export default function App() {
-  const [tab, setTab] = useState("Recipes");
+  const [tab, setTab] = useState("Plan");
   const [recipes, setRecipesRaw] = useState(() => cleanRecipes(dedupeById(load("recipes", []))));
   const [pantry, setPantryRaw] = useState(() => dedupeById(load("pantry", [])));
   const [plan, setPlanRaw] = useState(() => load("plan", emptyPlan()));
@@ -3650,6 +3664,10 @@ export default function App() {
   const [people, setPeopleRaw] = useState(() => load("people", []));
   const [seenSurvey, setSeenSurvey] = useState(() => load("seenSurvey", false));
   const [spices, setSpicesRaw] = useState(() => load("spices", []));
+  // Persistent ingredient→pantry links: { [normalized ingredient name]: pantryItemId }.
+  // Once the user links a recipe ingredient to a pantry item, it's remembered so
+  // future recipes with that name auto-deduct from the same item.
+  const [ingredientLinks, setIngredientLinksRaw] = useState(() => load("ingredientLinks", {}));
 
   // Persist INSIDE the functional updater so React supplies the true latest
   // state (no stale closure), and we save exactly what we commit. Empty dep
@@ -3675,6 +3693,9 @@ export default function App() {
   const setSpices = useCallback(v => {
     setSpicesRaw(prev => { const next = typeof v === "function" ? v(prev) : v; save("spices", next); return next; });
   }, []);
+  const setIngredientLinks = useCallback(v => {
+    setIngredientLinksRaw(prev => { const next = typeof v === "function" ? v(prev) : v; save("ingredientLinks", next); return next; });
+  }, []);
 
   // On mount, persist the deduped recipes/pantry and merged settings so any
   // healed duplicate ids / backfilled settings keys are written back (the
@@ -3693,7 +3714,7 @@ export default function App() {
       </div>
       <div style={{ flex:1, padding:"12px 16px 90px", overflowY:"auto" }}>
         {tab === "Recipes" && <RecipesTab recipes={recipes} setRecipes={setRecipes} settings={settings} setSettings={setSettings} dictionary={dictionary} setDictionary={setDictionary} />}
-        {tab === "Plan" && <PlanTab recipes={recipes} setRecipes={setRecipes} plan={plan} setPlan={setPlan} settings={settings} pantry={pantry} setPantry={setPantry} people={people} spices={spices} setSpices={setSpices} setTab={setTab} />}
+        {tab === "Plan" && <PlanTab recipes={recipes} setRecipes={setRecipes} plan={plan} setPlan={setPlan} settings={settings} pantry={pantry} setPantry={setPantry} people={people} spices={spices} setSpices={setSpices} setTab={setTab} ingredientLinks={ingredientLinks} setIngredientLinks={setIngredientLinks} />}
         {tab === "Shop" && <ShopTab plan={plan} recipes={recipes} setRecipes={setRecipes} pantry={pantry} setPantry={setPantry} spices={spices} setSpices={setSpices} settings={settings} people={people} setTab={setTab} />}
         {tab === "Pantry" && <PantryTab pantry={pantry} setPantry={setPantry} spices={spices} setSpices={setSpices} />}
         {tab === "Settings" && <SettingsTab settings={settings} setSettings={setSettings} people={people} setPeople={setPeople} pantry={pantry} recipes={recipes} dictionary={dictionary} />}
