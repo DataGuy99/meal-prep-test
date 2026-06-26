@@ -1668,8 +1668,10 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
     const trackedById = {}; // pantryId -> merged line
     const spices = new Set();
     const untracked = [];
+    let factor = 1; // representative scale (household demand is the same across dishes)
     for (const recipe of recipeList) {
       const lines = buildCookLines(recipe);
+      factor = lines.factor; // last one wins; all share the same household scaling
       lines.spices.forEach(s => spices.add(s));
       untracked.push(...lines.untracked);
       for (const l of lines.tracked) {
@@ -1683,7 +1685,7 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
         }
       }
     }
-    return { tracked: Object.values(trackedById), spices: [...spices], untracked };
+    return { factor, tracked: Object.values(trackedById), spices: [...spices], untracked };
   }
 
   function applyCook(day, meal, recipe, lines) {
@@ -2257,9 +2259,9 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
               <span style={{ fontSize:18, color:COLORS.textSec, cursor:"pointer" }} onClick={() => setCookModal(null)}>✕</span>
             </div>
             <div style={{ fontSize:12, color:COLORS.textSec, marginBottom:14 }}>
-              {cookModal.factor === 1
+              {(cookModal.factor ?? 1) === 1
                 ? "Cooking at recipe scale (no active people set)."
-                : `Scaled ${cookModal.factor.toFixed(2)}× for household demand.`}
+                : `Scaled ${(cookModal.factor ?? 1).toFixed(2)}× for household demand.`}
               {" "}Confirm to deduct from pantry.
             </div>
 
