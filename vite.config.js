@@ -27,5 +27,5 @@ function swCacheBust() {
 
 export default defineConfig({
   plugins: [react(), swCacheBust()],
-  base: '/meal-prep/',
+  base: '/meal-prep-test/',
 })
