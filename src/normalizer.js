@@ -223,6 +223,16 @@ export function normalizeIngredient(input, opts = {}) {
   const category = db ? db.cat : guessCategoryLocal(item);
   const ambiguousUnit = AMBIGUOUS_UNITS.has((unit || "").toLowerCase());
 
+  // Sub-unit precision: if the item has known sub-units (garlic clove/head) and
+  // the ingredient's unit names one, record its gram weight so the count<->weight
+  // bridge converts exactly (43 cloves = 215 g, not 43 heads).
+  let subUnit = null, subUnitGrams = null;
+  const sub = SUB_UNIT[item];
+  if (sub) {
+    const u = (unit || "").toLowerCase();
+    if (sub[u]) { subUnit = u; subUnitGrams = sub[u].g; }
+  }
+
   return {
     raw,
     qty: qty || 1,
@@ -236,6 +246,8 @@ export function normalizeIngredient(input, opts = {}) {
     soldAs,
     category,
     ambiguousUnit,           // if true: never auto-merge; offer manual merge
+    subUnit,                 // "clove"/"head" when recognized, else null
+    subUnitGrams,            // grams per sub-unit, for precise bridging
     neverBuy: NEVER_BUY.has(item),  // valid ingredient, but shopping skips it (water)
   };
 }

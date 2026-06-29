@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo, Component } from "react";
+import { normalizeIngredient, toWholeCount, canonicalize, unitInfo as nUnitInfo } from "./normalizer.js";
+import { ITEM_DB, SUB_UNIT, AMBIGUOUS_UNITS } from "./itemDb.js";
 
 // ============================================================
 // CONSTANTS
@@ -1043,10 +1045,14 @@ function mergeKeyLegacy(name) {
 }
 
 function generateShoppingList(plan, recipes, pantry, excludes = [], activePersonIds = null, maxOmissions = Infinity) {
-  // Bucket needs by canonical name + unit family. Within a family, sum in base
-  // units. Also record `parts` — each original ingredient that merged in — so
-  // the UI can expand a line to show its composition.
-  // needs[key] = { name, category, families: {fam: base}, parts: {fam: [{label, qty, unit}]} }
+  // Schema-based aggregation (Stage 2). Every ingredient is normalized to the
+  // structured form ONCE here, then bucketed by canonical `item`. Within an item
+  // we keep per-family base sums AND a grams-equivalent total (via the count<->
+  // weight bridge) so multi-unit messes (garlic x43 + 180g + 8tsp) collapse to
+  // ONE line. Composition records each distinct contributing part for the
+  // expandable breakdown.
+  // needs[item] = { item, display, category, soldAs, families:{fam:base},
+  //                 parts:[{label, qty, unit}], ambiguous }
   const needs = {};
   const now = Date.now();
   DAYS.forEach(d => MEALS.forEach(m => {
@@ -1056,76 +1062,120 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
       if (!recipe) continue;
       const qual = qualifyRecipe(recipe, excludes, activePersonIds, now, maxOmissions);
       const omittedSet = new Set(qual.omitted.map(n => normalize(n)));
-      for (const ing of (recipe.ingredients || [])) {
-        if (omittedSet.has(normalize(ing.name))) continue;
-        if (isSectionHeader(ing.name)) continue; // drop stray headers
-        if (isNeverBuy(ing.name)) continue; // water etc. — never buy
-        const key = mergeKey(ing.name);
-        if (!key) continue;
-        if (!needs[key]) needs[key] = { name: key, category: guessCategory(ing.name), families: {}, parts: {} };
-        const info = unitInfo(ing.unit);
-        const base = (ing.qty || 1) * info.factor;
-        needs[key].families[info.family] = (needs[key].families[info.family] || 0) + base;
-        // Record the original part for the expandable breakdown (only if it
-        // differs from the canonical name, so we don't show "onion: onion").
-        const origLabel = stripArtifacts(stripLeadingQty(ing.name));
-        if (!needs[key].parts[info.family]) needs[key].parts[info.family] = [];
-        needs[key].parts[info.family].push({
-          label: origLabel && normalize(origLabel) !== key ? origLabel : null,
-          qty: ing.qty || 1, unit: ing.unit || "",
-        });
+      for (const rawIng of (recipe.ingredients || [])) {
+        // Normalize on the fly (stored data may be legacy; we don't mutate it).
+        const ing = normalizeIngredient(rawIng);
+        if (!ing) continue;                       // header / empty
+        if (ing.neverBuy) continue;               // water etc.
+        if (omittedSet.has(normalize(rawIng.name || ing.item))) continue;
+        const key = ing.item;
+        if (!needs[key]) {
+          needs[key] = {
+            item: key, display: ing.itemDisplay || key, category: ing.category,
+            soldAs: ing.soldAs, families: {}, parts: [], ambiguous: ing.ambiguousUnit,
+          };
+        }
+        needs[key].families[ing.family] = (needs[key].families[ing.family] || 0) + ing.baseQty;
+        // Accumulate a grams-equivalent for count<->weight bridging. Use precise
+        // sub-unit weight (clove=5g) when known; else the item avg weight.
+        if (needs[key].gramsEquiv == null) needs[key].gramsEquiv = 0;
+        const dbk = ITEM_DB[key];
+        if (ing.family === "mass") {
+          needs[key].gramsEquiv += ing.baseQty;
+        } else if (ing.family === "count" && ing.subUnitGrams) {
+          needs[key].gramsEquiv += ing.baseQty * ing.subUnitGrams; // cloves * 5g
+        } else if (ing.family === "count" && dbk && dbk.avgG) {
+          needs[key].gramsEquiv += ing.baseQty * dbk.avgG;          // whole items * avg
+        } else {
+          // volume or unbridgeable — track separately so it isn't lost
+          if (!needs[key].unbridged) needs[key].unbridged = {};
+          needs[key].unbridged[ing.family] = (needs[key].unbridged[ing.family] || 0) + ing.baseQty;
+        }
+        needs[key].parts.push({ label: ing.itemDisplay, qty: ing.qty, unit: ing.unit, raw: ing.raw });
       }
     }
   }));
 
   const items = [];
   for (const [key, need] of Object.entries(needs)) {
-    // Match a pantry item by canonical name so "2 dozen eggs" offsets recipe eggs.
-    const pantryItem = pantry.find(p => mergeKey(p.name) === key);
+    const pantryItem = pantry.find(p => {
+      const pn = normalizeIngredient(p);
+      return pn && pn.item === key;
+    });
 
-    for (const [family, baseQty] of Object.entries(need.families)) {
-      let remaining = baseQty;
+    // Decide the unit to express this item in. Count-sold items try to show whole
+    // counts; weight-sold items show mass/volume. We compute a single combined
+    // amount by converting each family to the display family where possible.
+    const db = ITEM_DB[key];
+    const families = need.families;
+    const famNames = Object.keys(families);
+
+    if (need.soldAs === "count" && db && db.avgG) {
+      // Express the accumulated grams-equivalent as whole counts.
+      let grams = need.gramsEquiv || 0;
       let haveNote = "";
-
-      // Subtract what's already in the pantry. Count families unify (dozen vs
-      // singles), mass/volume convert within family.
       if (pantryItem && pantryItem.qty > 0) {
-        const pInfo = unitInfo(pantryItem.unit);
-        const bothCount = family.startsWith("count") && pInfo.family.startsWith("count");
-        if (pInfo.family === family || bothCount) {
-          const haveBase = pantryItem.qty * (bothCount && pInfo.family !== family ? 1 : pInfo.factor);
-          remaining -= haveBase;
-          haveNote = `have ${pantryItem.qty}${pantryItem.unit ? " " + pantryItem.unit : ""}`;
-        }
+        const pn = normalizeIngredient(pantryItem);
+        let pg = null;
+        if (pn.family === "mass") pg = pn.baseQty;
+        else if (pn.family === "count" && pn.subUnitGrams) pg = pn.baseQty * pn.subUnitGrams;
+        else if (pn.family === "count" && db.avgG) pg = pn.baseQty * db.avgG;
+        if (pg != null) { grams -= pg; haveNote = `have ${pantryItem.qty}${pantryItem.unit ? " " + pantryItem.unit : ""}`; }
       }
-
-      if (remaining > 0.01) {
-        const disp = prettyUnit(family, remaining);
-        // Build composition: distinct original parts that merged into this line.
-        const rawParts = (need.parts[family] || []).filter(p => p.label);
-        const seen = new Set();
-        const composition = [];
-        for (const p of rawParts) {
-          const sig = p.label.toLowerCase() + "|" + p.qty + "|" + p.unit;
-          if (seen.has(sig)) continue;
-          seen.add(sig);
-          composition.push(p);
+      if (grams > 0.01) {
+        const count = grams / db.avgG;
+        items.push(makeItem(need, Math.max(1, Math.round(count)), "", pantryItem, haveNote));
+      }
+      // Families that couldn't bridge (e.g. volume) show as separate lines.
+      for (const fam of Object.keys(need.unbridged || {})) {
+        const disp = prettyUnit(fam, need.unbridged[fam]);
+        if (disp.qty > 0.01) items.push(makeItem(need, round1(disp.qty), disp.unit, pantryItem, ""));
+      }
+    } else {
+      // Weight/volume item: per-family lines (usually just one), pantry-subtracted.
+      for (const fam of famNames) {
+        let remaining = families[fam];
+        let haveNote = "";
+        if (pantryItem && pantryItem.qty > 0) {
+          const pn = normalizeIngredient(pantryItem);
+          const bothCount = fam.startsWith("count") && pn.family.startsWith("count");
+          if (pn.family === fam || bothCount) {
+            remaining -= pn.baseQty;
+            haveNote = `have ${pantryItem.qty}${pantryItem.unit ? " " + pantryItem.unit : ""}`;
+          }
         }
-        items.push({
-          name: need.name,
-          qty: round1(disp.qty),
-          unit: disp.unit,
-          category: need.category,
-          store: pantryItem?.store || "",
-          checked: false,
-          source: "plan",
-          haveNote,
-          composition: composition.length > 1 ? composition : [],
-        });
+        if (remaining > 0.01) {
+          const disp = prettyUnit(fam, remaining);
+          items.push(makeItem(need, round1(disp.qty), disp.unit, pantryItem, haveNote));
+        }
       }
     }
   }
   return items;
+
+  // Build a shopping item with composition (distinct contributing parts).
+  function makeItem(need, qty, unit, pantryItem, haveNote) {
+    const seen = new Set();
+    const composition = [];
+    for (const p of need.parts) {
+      const sig = (p.label || "").toLowerCase() + "|" + p.qty + "|" + p.unit;
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      composition.push(p);
+    }
+    return {
+      name: need.display,
+      item: need.item,
+      qty, unit,
+      category: need.category,
+      store: pantryItem?.store || "",
+      checked: false,
+      source: "plan",
+      haveNote: haveNote || "",
+      ambiguous: need.ambiguous || false,
+      composition: composition.length > 1 ? composition : [],
+    };
+  }
 }
 
 function getFloorItems(pantry) {
