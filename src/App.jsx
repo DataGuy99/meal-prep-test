@@ -3254,7 +3254,20 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
   function deleteItem(id) { setPantry(prev => prev.filter(p => p.id !== id)); setEditId(null); }
   function addItem() {
     if (!addForm.name.trim()) return;
-    setPantry(prev => [...prev, { ...addForm, id: uid(), name: normalize(addForm.name) }]);
+    // Stage 2c: run the manual entry through the normalizer so pantry items carry
+    // the same schema as recipe ingredients (canonical item, clean unit, family,
+    // category). The user's qty/floor/storage/stores are preserved as-is.
+    const norm = normalizeIngredient({ name: addForm.name, unit: addForm.unit, qty: addForm.qty });
+    const cleaned = norm ? {
+      ...addForm,
+      name: norm.item,               // canonical identity (so it matches recipes)
+      itemDisplay: norm.itemDisplay, // nicer label for display
+      unit: addForm.unit || norm.unit, // the form's explicit unit wins
+      family: norm.family,
+      category: norm.category,
+      soldAs: norm.soldAs,
+    } : { ...addForm, name: normalize(addForm.name) };
+    setPantry(prev => [...prev, { ...cleaned, id: uid() }]);
     setAddForm({ name:"", qty:1, unit:"pcs", floor:0, storage:"dry", stores:[] });
     setShowAdd(false);
   }
@@ -3332,7 +3345,7 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
               <div onClick={() => setEditId(isEdit?null:item.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", borderRadius:isEdit?"8px 8px 0 0":8, background:below?COLORS.quarantineBg:COLORS.surface, border:`1px solid ${below?`${COLORS.quarantine}30`:COLORS.border}`, borderBottom:isEdit?"none":undefined, cursor:"pointer" }}>
                 <div style={{ width:4, height:32, borderRadius:2, background:sc.fg, flexShrink:0 }} />
                 <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:14, fontWeight:600 }}>{item.name}</div>
+                  <div style={{ fontSize:14, fontWeight:600 }}>{item.itemDisplay || item.name}</div>
                   <div style={{ display:"flex", gap:6, alignItems:"center", marginTop:2 }}>
                     <Badge color={sc.fg} bg={sc.bg}>{sc.label}</Badge>
                     {itemStores(item).length > 0 && <span style={{ fontSize:10, color:COLORS.textSec }}>{itemStores(item).join(", ")}</span>}
@@ -3505,7 +3518,7 @@ function PeopleSection({ people, setPeople }) {
                   <div onClick={() => updatePerson(p.id, { active: !p.active })} style={{ width:22, height:22, borderRadius:5, border:`2px solid ${p.active?COLORS.primary:COLORS.border}`, background:p.active?COLORS.primary:"transparent", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", flexShrink:0 }}>
                     {p.active && <span style={{ color:"#fff", fontSize:13, fontWeight:700 }}>✓</span>}
                   </div>
-                  <span style={{ fontSize:14, fontWeight:700, flex:1 }}>{p.name}</span>
+                  <span style={{ fontSize:14, fontWeight:700, flex:1 }}>{p.itemDisplay || p.name}</span>
                   <span style={{ fontSize:11, color:COLORS.textSec }}>{(p.weight * p.attendance).toFixed(2)} portion</span>
                   <span style={{ fontSize:14, cursor:"pointer", color:COLORS.red }} onClick={() => removePerson(p.id)}>×</span>
                 </div>
