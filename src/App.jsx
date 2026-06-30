@@ -2340,6 +2340,27 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
     setSelectedSlot(null);
   }
 
+  // Clear the whole week so the user can plan fresh. Locked slots are kept
+  // (a user locks meals they want to protect); everything else is emptied.
+  function clearWeek() {
+    const anyContent = DAYS.some(d => MEALS.some(m => slotEntries(plan?.[d]?.[m]).length > 0));
+    if (!anyContent) return;
+    const lockedCount = DAYS.reduce((a, d) => a + MEALS.filter(m => plan?.[d]?.[m]?.locked && slotEntries(plan[d][m]).length > 0).length, 0);
+    const msg = lockedCount > 0
+      ? `Clear the meal plan? ${lockedCount} locked meal${lockedCount > 1 ? "s" : ""} will be kept; everything else is emptied.`
+      : "Clear the whole meal plan? This empties every slot so you can plan a fresh week.";
+    if (!confirm(msg)) return;
+    setPlan(prev => {
+      const next = JSON.parse(JSON.stringify(prev));
+      for (const d of DAYS) for (const m of MEALS) {
+        if (next[d]?.[m]?.locked && slotEntries(next[d][m]).length > 0) continue; // keep locked
+        if (next[d]) next[d][m] = null;
+      }
+      return next;
+    });
+    setSelectedSlot(null);
+  }
+
   function doGenerate() {
     const newPlan = generatePlan(recipes, plan, settings, activeIds);
     // If generation filled nothing, tell the user why instead of failing
@@ -2538,6 +2559,9 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
         <span style={{ fontSize:14, fontWeight:700 }}>Meal Plan</span>
         {recipes.length > 0 && (
           <div style={{ display:"flex", gap:6 }}>
+            {DAYS.some(d => MEALS.some(m => slotEntries(plan?.[d]?.[m]).length > 0)) && (
+              <Btn small variant="ghost" style={{ color:COLORS.red, borderColor:COLORS.red }} onClick={clearWeek}>Clear</Btn>
+            )}
             <Btn small variant="secondary" onClick={doRerollUnlocked}>🎲 Reroll</Btn>
             <Btn small onClick={doGenerate}>Generate</Btn>
           </div>
@@ -3485,13 +3509,35 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
               </div>
               {isEdit && (
                 <div style={{ padding:"10px 12px", background:below?COLORS.quarantineBg:COLORS.surface, border:`1px solid ${below?`${COLORS.quarantine}30`:COLORS.border}`, borderTop:`1px dashed ${COLORS.border}`, borderRadius:"0 0 8px 8px", display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap" }} onClick={e => e.stopPropagation()}>
+                  <div style={{ flexBasis:"100%" }}>
+                    <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Name</div>
+                    <input value={item.itemDisplay ?? item.name ?? ""} onChange={e => updateItem(item.id, { itemDisplay: e.target.value, name: normalize(e.target.value) })} style={{ width:"100%", boxSizing:"border-box", padding:"6px 8px", borderRadius:5, border:`1.5px solid ${COLORS.border}`, fontSize:14 }} />
+                  </div>
                   <div>
                     <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Qty</div>
                     <NumberInput value={item.qty} onCommit={v => updateItem(item.id, { qty: v })} min={0} fallback={0} style={{ width:56, padding:"5px 6px", borderRadius:5, border:`1.5px solid ${COLORS.border}`, fontSize:14, textAlign:"center", fontWeight:600 }} />
                   </div>
                   <div>
+                    <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Unit</div>
+                    <select value={item.unit || ""} onChange={e => updateItem(item.id, { unit: e.target.value })} style={{ padding:"6px 4px", borderRadius:5, border:`1.5px solid ${COLORS.border}`, fontSize:13, background:"#fff", maxWidth:90 }}>
+                      <option value="">(count)</option>
+                      <option value="pcs">pcs</option>
+                      <optgroup label="weight"><option value="g">g</option><option value="kg">kg</option><option value="oz">oz</option><option value="lb">lb</option></optgroup>
+                      <optgroup label="volume"><option value="ml">ml</option><option value="l">l</option><option value="tsp">tsp</option><option value="tbsp">tbsp</option><option value="cup">cup</option></optgroup>
+                      <optgroup label="count"><option value="dozen">dozen</option><option value="can">can</option><option value="bottle">bottle</option><option value="bag">bag</option><option value="bunch">bunch</option><option value="head">head</option><option value="pack">pack</option><option value="jar">jar</option></optgroup>
+                    </select>
+                  </div>
+                  <div>
                     <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Floor</div>
                     <NumberInput value={item.floor} onCommit={v => updateItem(item.id, { floor: v })} min={0} fallback={0} style={{ width:56, padding:"5px 6px", borderRadius:5, border:`1.5px solid ${below?COLORS.quarantine:COLORS.border}`, fontSize:14, textAlign:"center", fontWeight:600 }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Storage</div>
+                    <div style={{ display:"flex", gap:4 }}>
+                      {Object.entries(SC).map(([k, scOpt]) => (
+                        <Btn key={k} small variant={item.storage===k?"primary":"ghost"} onClick={() => updateItem(item.id, { storage: k })} style={item.storage===k?{ background:scOpt.fg, fontSize:11, padding:"4px 8px" }:{ fontSize:11, padding:"4px 8px", color:scOpt.fg, borderColor:scOpt.fg }}>{scOpt.label}</Btn>
+                      ))}
+                    </div>
                   </div>
                   <div style={{ minWidth:140 }}>
                     <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Store(s)</div>
