@@ -78,16 +78,34 @@ const UNIT_WORD_MAP = {
   slice: "slice", slices: "slice", piece: "pc", pieces: "pc", pc: "pc", pcs: "pc",
   bunch: "bunch", bunches: "bunch", block: "block", blocks: "block",
   fillet: "fillet", fillets: "fillet", dozen: "dozen", pinch: "pinch", dash: "dash",
+  jar: "jar", jars: "jar", package: "package", packages: "package", pack: "pack", packs: "pack",
+  container: "container", containers: "container", box: "box", boxes: "box",
+  sprig: "sprig", sprigs: "sprig", handful: "handful", stick: "stick", sticks: "stick",
 };
 const UNIT_WORD_ALTERNATION = Object.keys(UNIT_WORD_MAP).sort((a, b) => b.length - a.length).join("|");
 
 // ---- text helpers ----
-const NORM_KEEP = new Set(["hummus", "couscous", "asparagus", "molasses", "watercress"]);
+const NORM_KEEP = new Set(["hummus", "couscous", "asparagus", "molasses", "watercress", "chili", "chilli", "broccoli", "zucchini", "spaghetti", "macaroni", "gnocchi", "confetti", "ravioli"]);
+// Words where -ies -> -y is WRONG (the singular already ends in -i, plural is just -es/-s).
+const IES_EXCEPTIONS = { chilies: "chili", chillies: "chilli", chilis: "chili" };
 export function normalize(s) {
   if (typeof s !== "string") s = s == null ? "" : String(s);
   let w = s.toLowerCase().trim().replace(/-/g, " ").replace(/\s+/g, " ");
   if (!w) return w;
+  // Multi-word: only singularize the LAST word (the head noun). This keeps
+  // compounds intact ("green onion" stays, "fish cake" stays) while still
+  // fixing "green chilies" -> "green chili".
+  if (w.includes(" ")) {
+    const parts = w.split(" ");
+    const last = parts.pop();
+    return [...parts, singularize(last)].join(" ");
+  }
+  return singularize(w);
+}
+function singularize(w) {
+  if (!w) return w;
   if (NORM_KEEP.has(w)) return w;
+  if (IES_EXCEPTIONS[w]) return IES_EXCEPTIONS[w];
   if (/[^aeiou]ies$/.test(w)) return w.replace(/ies$/, "y");
   if (/ves$/.test(w)) return w.replace(/s$/, "");
   if (/oes$/.test(w)) return w.replace(/es$/, "");
@@ -156,6 +174,13 @@ export function canonicalize(rawName) {
   for (const noise of MERGE_NOISE) n = n.replace(new RegExp(`(^|[,\\s])${noise.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([,\\s]|$)`, "gi"), " ");
   n = n.replace(/[,]+/g, " ").replace(/\s+/g, " ").trim();
   n = n.split(" ").map(w => normalize(w)).filter(Boolean).join(" ");
+  // If stripping left nothing usable (e.g. name was just "cloves (optional)" and
+  // both the noun and the parenthetical got removed), fall back to the cleaned
+  // pre-canonical display rather than emitting leftover junk like "(optional)".
+  if (!n || /^\(?optional\)?$/.test(n) || /^[^a-z]*$/.test(n)) {
+    const fallback = display0.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+    n = fallback || display0;
+  }
   let item = n || display0;
   for (const [re, to] of CANONICAL_BASE) { if (re.test(item)) { item = item.replace(re, to).replace(/\s+/g, " ").trim(); break; } }
   // Display label: the cleaned-but-uncanonicalized name (nicer), falling back to item.
@@ -173,7 +198,12 @@ export function isNeverBuy(name) {
 // opts:  { tier } default "essential"
 // returns: structured Ingredient, or null (header/empty/never-buy)
 export function normalizeIngredient(input, opts = {}) {
-  const tier = opts.tier || (input && input.tier) || "essential";
+  let tier = opts.tier || (input && input.tier) || "essential";
+  // An "(optional)" / "optional" marker anywhere means this is a secondary
+  // ingredient — and the word must never become part of the item name.
+  if (/\boptional\b/i.test(typeof input === "string" ? input : (input && input.name) || "")) {
+    tier = "secondary";
+  }
 
   // Reconstruct a single raw line from either form.
   let rawLine;
@@ -193,6 +223,8 @@ export function normalizeIngredient(input, opts = {}) {
 
   // Strip a broken-range remnant ("to 4 clove" -> "4 clove").
   let line = raw.replace(/^to\s+(?=[\d½⅓⅔¼¾⅛])/i, "");
+  // Remove optional/required markers — they describe the ingredient, they aren't it.
+  line = line.replace(/\(\s*optional[^)]*\)/gi, " ").replace(/\boptional\b/gi, " ").replace(/\s+/g, " ").trim();
 
   // Quantity.
   let qty = 1, rest = line;
@@ -204,6 +236,12 @@ export function normalizeIngredient(input, opts = {}) {
   const uw = rest.match(new RegExp(`^(${UNIT_WORD_ALTERNATION})\\b\\.?\\s+(.*)$`, "i"));
   if (uw) { unit = UNIT_WORD_MAP[uw[1].toLowerCase()] || ""; rest = uw[2]; }
   rest = rest.replace(/^of\s+/i, "");
+  // Strip leading measurement/size descriptors that aren't the item:
+  // "2 inch cinnamon piece" -> "cinnamon piece", "whole cashew" -> "cashew".
+  rest = rest.replace(/^\s*[\d.\/]*\s*(inch|inches|cm|mm)\s+/i, "");
+  rest = rest.replace(/^(whole|large|medium|small|extra large|fresh|dried|raw|ripe)\s+/i, "");
+  // Strip trailing purpose clauses: "water to blend" -> "water", "oil for frying" -> "oil".
+  rest = rest.replace(/\s+(to blend|to taste|to serve|to garnish|for blending|for frying|for serving|for garnish|for drizzling|for brushing|if required|as needed|or more)\b.*$/i, "");
 
   // Name -> canonical identity + display.
   const cleanedName = stripPrepClauseLocal(normalize(rest));

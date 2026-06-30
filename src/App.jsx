@@ -3850,6 +3850,7 @@ function BoostsSection({ boosts, onChange, ingredientPool = [] }) {
 }
 
 function DataSection() {
+  const importRef = useRef(null);
   function exportAll() {
     const data = {};
     for (let i = 0; i < localStorage.length; i++) {
@@ -3858,6 +3859,30 @@ function DataSection() {
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "prep-backup.json"; a.click();
+  }
+  function importBackup(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      let data;
+      try { data = JSON.parse(e.target.result); }
+      catch (err) { alert("Import failed: that file isn't valid JSON.\n\n(" + err.message + ")"); return; }
+      if (!data || typeof data !== "object") { alert("Import failed: the file didn't contain a backup object."); return; }
+      // Only accept prep_ keys; report what was found so a bad file is obvious.
+      const keys = Object.keys(data).filter(k => k.startsWith("prep_"));
+      if (keys.length === 0) { alert("Import failed: no Prep data found in that file (expected keys like prep_recipes)."); return; }
+      const recipeCount = Array.isArray(data.prep_recipes) ? data.prep_recipes.length : 0;
+      if (!confirm(`Import this backup?\n\nFound: ${keys.length} data sections` + (recipeCount ? `, ${recipeCount} recipes` : "") + `.\n\nThis REPLACES your current data in this app. Export your own backup first if you want to keep it.`)) return;
+      try {
+        keys.forEach(k => localStorage.setItem(k, JSON.stringify(data[k])));
+        alert("Imported successfully. Reloading.");
+        window.location.reload();
+      } catch (err) {
+        alert("Import wrote partially but hit an error (storage may be full):\n\n" + err.message);
+      }
+    };
+    reader.onerror = () => alert("Import failed: couldn't read the file.");
+    reader.readAsText(file);
   }
   function clearAll() {
     if (confirm("Delete ALL data? This cannot be undone.")) {
@@ -3875,6 +3900,9 @@ function DataSection() {
       <div style={{ fontSize:12, color:COLORS.textSec, marginBottom:10 }}>Manage your data</div>
       <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
         <Btn variant="secondary" onClick={exportAll}>Export backup (JSON)</Btn>
+        <Btn variant="secondary" onClick={() => importRef.current && importRef.current.click()}>Import backup (JSON)</Btn>
+        <input ref={importRef} type="file" accept="application/json,.json" style={{ display:"none" }}
+               onChange={(e) => { importBackup(e.target.files && e.target.files[0]); e.target.value = ""; }} />
         <Btn variant="danger" onClick={clearAll}>Clear all data</Btn>
       </div>
     </div>
