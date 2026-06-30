@@ -51,6 +51,9 @@ function evalQtyToken(tok) {
 }
 function parseLeadingQty(s) {
   let str = String(s).trim();
+  // Strip comma thousands separators inside numbers ("1,600 g" -> "1600 g")
+  // so large weights parse correctly instead of losing the quantity.
+  str = str.replace(/(\d),(?=\d{3}\b)/g, "$1");
   let expanded = "";
   for (const ch of str) expanded += (FRACTION_MAP[ch] != null ? " " + FRACTION_MAP[ch] : ch);
   expanded = expanded.trim();
@@ -253,6 +256,18 @@ export function normalizeIngredient(input, opts = {}) {
   // Strip trailing purpose clauses: "water to blend" -> "water", "oil for frying" -> "oil".
   rest = rest.replace(/\s+(to blend|to taste|to serve|to garnish|for blending|for frying|for serving|for garnish|for drizzling|for brushing|if required|as needed|or more)\b.*$/i, "");
 
+  // Trailing "<number> <unit>" with no leading quantity: "water 5 cup",
+  // "soy sauce 2 tbsp". The amount was written after the item. Only fires when
+  // we didn't already find a leading qty/unit, so it can't override an explicit
+  // leading amount.
+  if (qty === 1 && !unit) {
+    const trail = rest.match(new RegExp(`^(.+?)\\s+([\\d.\\/]+)\\s*(${UNIT_WORD_ALTERNATION})\\s*$`, "i"));
+    if (trail) {
+      const tq = evalQtyToken(trail[2]);
+      if (tq != null) { rest = trail[1]; qty = tq; unit = UNIT_WORD_MAP[trail[3].toLowerCase()] || ""; }
+    }
+  }
+
   // Name -> canonical identity + display.
   const cleanedName = stripPrepClauseLocal(normalize(rest));
   if (!cleanedName) return null;
@@ -289,15 +304,21 @@ export function normalizeIngredient(input, opts = {}) {
     }
   }
 
-  // Uncertainty signal for the entry-review UI. Flags ingredients a human should
-  // eyeball: unknown item (not in our DB), ambiguous unit, suspicious leftover
-  // text (URL, symbols, very long), or a missing/empty item.
+  // Uncertainty signal for the entry-review UI. Flags ingredients a human
+  // should eyeball — but ONLY genuinely suspect ones. We do NOT flag an item
+  // merely for being absent from ITEM_DB: real cooking uses thousands of
+  // ingredients (water, turmeric, kimchi, quinoa...) and the DB has ~110, so a
+  // not-in-DB flag marks ~40% of entries and buries the real problems. Instead
+  // we look for textual red flags in the cleaned item.
   let uncertain = false, uncertainReason = "";
+  const itemWords = item ? item.split(/\s+/).length : 0;
   if (!item || item.length < 2) { uncertain = true; uncertainReason = "couldn't read the item"; }
-  else if (/https?:|www\.|\.com|\.net|\//.test(raw)) { uncertain = true; uncertainReason = "looks like a link, not an ingredient"; }
-  else if (item.split(/\s+/).length > 5 || item.length > 40) { uncertain = true; uncertainReason = "unusually long — may be a mis-paste"; }
+  else if (/https?:\/\/|www\.\w|\w+\.(?:com|net|org|io|co)\b/i.test(raw)) { uncertain = true; uncertainReason = "looks like a link, not an ingredient"; }
+  else if (/[*]{2,}|#\d|\bhttp\b/i.test(raw)) { uncertain = true; uncertainReason = "has stray symbols — check it"; }
+  else if (itemWords > 6 || item.length > 45) { uncertain = true; uncertainReason = "unusually long — may be a mis-paste"; }
+  else if (/\b(and|&)\b/i.test(item) && itemWords >= 3 && !/\b(and )?(sour cream|half and half|mac and cheese|fish and chips)\b/i.test(item)) { uncertain = true; uncertainReason = "may be two ingredients — split if so"; }
+  else if (/^(\+|or |of )\b/i.test(item) || /\b(or see|refer|updated|adjust|divided)\b/i.test(item)) { uncertain = true; uncertainReason = "leftover recipe text — check it"; }
   else if (ambiguousUnit) { uncertain = true; uncertainReason = `"${unit}" size varies — confirm amount`; }
-  else if (!db) { uncertain = true; uncertainReason = "new item — confirm it's right"; }
 
   return {
     raw,
