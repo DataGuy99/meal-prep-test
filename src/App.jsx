@@ -1195,17 +1195,23 @@ function getFloorItems(pantry) {
 // prevents the floor double-add (an item that's both plan-needed and below
 // floor appears once). Manual items are passed through untouched.
 function buildUnifiedList(plan, recipes, pantry, excludes = [], activePersonIds = null, maxOmissions = Infinity) {
-  // Collect plan needs in base units per (name, family).
+  // Collect plan needs — already normalized + merged by generateShoppingList.
   const planItems = generateShoppingList(plan, recipes, pantry, excludes, activePersonIds, maxOmissions);
   const floorItems = getFloorItems(pantry);
 
-  // Key each by name|family. For floor items, derive their family from unit.
-  const merged = {}; // key -> item with baseQty for comparison
-  const keyOf = (name, unit) => `${mergeKey(name)}|${unitInfo(unit).family}`;
+  // Key by the canonical `item` when present (from the normalizer) so we DON'T
+  // re-split what the generator already merged. Floor items (no `item`) fall back
+  // to a normalized name. Family still separates genuinely different forms.
+  const merged = {};
+  const keyOf = (item) => {
+    const base = item.item || normalizeIngredient({ name: item.name, unit: item.unit, qty: item.qty })?.item || normalize(item.name);
+    const fam = nUnitInfo(item.unit).family;
+    return `${base}|${fam}`;
+  };
 
   function consider(item, reason) {
-    const k = keyOf(item.name, item.unit);
-    const info = unitInfo(item.unit);
+    const k = keyOf(item);
+    const info = nUnitInfo(item.unit);
     const base = (parseFloat(item.qty) || 0) * info.factor;
     if (!merged[k]) {
       merged[k] = { ...item, _base: base, _family: info.family, sources: [item.source] };
@@ -1213,24 +1219,30 @@ function buildUnifiedList(plan, recipes, pantry, excludes = [], activePersonIds 
     } else {
       const m = merged[k];
       if (!m.sources.includes(item.source)) m.sources.push(item.source);
-      // Take the larger need (max), re-deriving display from the winning base.
+      // Plan items are already correctly computed; only floor items should be
+      // able to RAISE the quantity (the floor needs more than the plan). Never
+      // overwrite a plan item's display from a floor re-derivation downward.
       if (base > m._base) {
         m._base = base;
-        const disp = prettyUnit(info.family, base);
-        m.qty = round1(disp.qty);
-        m.unit = disp.unit;
+        // Preserve the richer plan display (counts/composition) if this is the
+        // same item; only swap to a plain display when the incoming wins on need.
+        if (!m.composition || m.composition.length === 0) {
+          const disp = prettyUnit(info.family, base);
+          m.qty = round1(disp.qty);
+          m.unit = disp.unit;
+        }
       }
-      // Prefer a store hint if we don't have one.
       if (!m.store && item.store) m.store = item.store;
-      // Keep a floor reason if present (explains why it's here beyond the plan).
       if (reason && !m.reason) m.reason = reason;
+      // Carry composition/ambiguous forward if the kept item lacked them.
+      if ((!m.composition || !m.composition.length) && item.composition && item.composition.length) m.composition = item.composition;
+      if (item.ambiguous && !m.ambiguous) m.ambiguous = true;
     }
   }
 
   planItems.forEach(it => consider(it, null));
   floorItems.forEach(it => consider(it, it.reason));
 
-  // Strip internal fields.
   return Object.values(merged).map(({ _base, _family, ...rest }) => rest);
 }
 
@@ -2906,9 +2918,9 @@ function ShopTab({ plan, recipes, setRecipes, pantry, setPantry, spices, setSpic
     const unified = buildUnifiedList(plan, recipes, pantry, excludes, activeIds, maxOmissions);
     // Merge manual items in, deduped by name+family against the unified list.
     const byKey = {};
-    const keyOf = (name, unit) => `${normalize(name)}|${unitInfo(unit).family}`;
+    const keyOf = (it) => `${it.item || normalize(it.name)}|${nUnitInfo(it.unit).family}`;
     [...unified, ...manual].forEach(it => {
-      const k = keyOf(it.name, it.unit);
+      const k = keyOf(it);
       if (!byKey[k]) byKey[k] = { ...it };
       else {
         // keep existing; note manual source if applicable

@@ -128,7 +128,9 @@ const CANONICAL_BASE = [
   [/^(fine|coarse|kosher|sea|table|flaky|iodized)?\s*salt$/, "salt"],
   [/^garlic clove(s)?$/, "garlic"],
   [/^clove(s)? garlic$/, "garlic"],
-  [/^(minced|crushed|grated)?\s*garlic$/, "garlic"],
+  [/\bgarlic clove(s)?\b/, "garlic"],
+  [/\bclove(s)? (of )?garlic\b/, "garlic"],
+  [/^(minced|crushed|grated|chopped|sliced|whole|peeled)?\s*garlic( clove(s)?)?( minced| crushed| grated| chopped)?$/, "garlic"],
   [/^(yellow|white|red|brown|spanish|sweet)?\s*onion$/, "onion"],
   [/^(freshly ground|ground|cracked|whole)?\s*black pepper$/, "black pepper"],
   [/^(all purpose|plain|cake|bread|self raising|self-raising)?\s*flour$/, "flour"],
@@ -141,8 +143,16 @@ const CANONICAL_BASE = [
   [/.*\bchicken breast\b.*/, "chicken breast"],
   [/.*\bchicken thigh\b.*/, "chicken thigh"],
   [/^.*boneless skinless chicken.*$/, "chicken breast"],
-  [/.*\b(rib eye|ribeye|top sirloin|sirloin)\b.*/, "beef"],
+  [/.*\b(rib eye|ribeye|top sirloin|sirloin|flank steak|skirt steak|chuck|brisket)\b.*/, "beef"],
+  [/.*\b(thinly sliced beef|thin beef|thinly beef|lean beef|ground beef|beef short rib|short rib|stewing beef|beef chuck)\b.*/, "beef"],
+  [/^beef\b.*/, "beef"],
   [/.*\bfish cake\b.*/, "fish cake"],
+  [/^(neutral |cooking |vegetable |canola |neutral cooking )?oil\b.*/, "oil"],
+  [/.*\bcooking oil\b.*/, "oil"],
+  [/^soy$/, "soy sauce"],
+  [/.*\bkikkoman.*soy.*/, "soy sauce"],
+  [/.*soup soy sauce.*/, "soy sauce"],
+  [/^(white |granulated |caster )?sugar\b.*/, "sugar"],
 ];
 
 const SECTION_HEADERS = new Set(["for the sauce","for the meat","for the marinade","for the dough","for the filling","for the topping","for the garnish","for the batter","for the dressing","for the soup","for the base","for the broth","for the seasoning","for serving","for the dipping sauce","for the glaze","sauce","marinade","seasoning","garnish","topping","filling","dressing","dipping sauce","soy dipping sauce","for the coating","to serve","optional","for the rice","for the noodles","for the vegetables","for the chicken","for sauce","for meat","for marinade","second marination","first marination","marination","bulgogi marinade"]);
@@ -262,13 +272,21 @@ export function normalizeIngredient(input, opts = {}) {
   const ambiguousUnit = AMBIGUOUS_UNITS.has((unit || "").toLowerCase());
 
   // Sub-unit precision: if the item has known sub-units (garlic clove/head) and
-  // the ingredient's unit names one, record its gram weight so the count<->weight
-  // bridge converts exactly (43 cloves = 215 g, not 43 heads).
+  // the ingredient names one — either as the unit OR in the original name (e.g.
+  // "garlic clove" with no explicit unit) — record its gram weight so the
+  // count<->weight bridge converts exactly (43 cloves = 215 g, not 43 heads).
   let subUnit = null, subUnitGrams = null;
   const sub = SUB_UNIT[item];
   if (sub) {
     const u = (unit || "").toLowerCase();
     if (sub[u]) { subUnit = u; subUnitGrams = sub[u].g; }
+    else if (family === "count") {
+      // Look for a sub-unit word in the raw name (e.g. "...clove...").
+      const lowerRaw = raw.toLowerCase();
+      for (const su of Object.keys(sub)) {
+        if (new RegExp(`\\b${su}s?\\b`).test(lowerRaw)) { subUnit = su; subUnitGrams = sub[su].g; break; }
+      }
+    }
   }
 
   return {
