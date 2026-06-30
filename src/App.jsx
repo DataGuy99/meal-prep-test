@@ -1081,8 +1081,13 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
         // it become a phantom "xN" line. Flag the item as needed; if any real
         // measured amount exists, that's what shows. If ONLY bare counts exist,
         // we show a single "to taste" line instead of a summed count.
+        // A bare count of exactly 1 (no unit) on a WEIGHT item is the classic
+        // "to taste" / "a pinch" artifact (recipe wrote just "salt"). But an
+        // explicit count >= 2 ("2 chicken thigh", "3 eggs") is a REAL quantity —
+        // keep it as a count line, don't fold it into "to taste".
         const isBareCount = ing.family === "count" && !ing.unit && !ing.subUnitGrams;
-        if (ing.soldAs === "weight" && isBareCount) {
+        const qtyVal = parseFloat(ing.qty) || 1;
+        if (ing.soldAs === "weight" && isBareCount && qtyVal <= 1) {
           needs[key].toTaste = true;
           needs[key].parts.push({ label: ing.itemDisplay, qty: ing.qty, unit: ing.unit, raw: ing.raw });
           continue;
