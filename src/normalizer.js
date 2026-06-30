@@ -143,6 +143,14 @@ const CANONICAL_BASE = [
   [/^(spring onion|scallion|green onion)s?$/, "green onion"],
   [/^(low fat|reduced fat|full fat|light|homemade|japanese|kewpie)?\s*mayonnaise$/, "mayonnaise"],
   [/^(low fat|reduced fat|full fat|light|homemade)?\s*mayo$/, "mayonnaise"],
+  // Stocks/broths are their own products (you buy a carton, not the meat).
+  // These MUST come before the beef/chicken meat rules below so "beef stock"
+  // and "chicken broth" don't collapse into "beef"/"chicken breast".
+  [/.*\b(beef|chicken|vegetable|veg|pork|fish|bone|dashi)\b.*\b(stock|broth)\b.*/, (mm) => {
+    const base = /beef/.test(mm) ? "beef" : /chicken/.test(mm) ? "chicken" : /pork/.test(mm) ? "pork" : /fish/.test(mm) ? "fish" : /dashi/.test(mm) ? "dashi" : "vegetable";
+    return base + " stock";
+  }],
+  [/.*\b(stock|broth)\b.*/, "stock"],
   [/.*\bchicken breast\b.*/, "chicken breast"],
   [/.*\bchicken thigh\b.*/, "chicken thigh"],
   [/^.*boneless skinless chicken.*$/, "chicken breast"],
@@ -223,9 +231,19 @@ export function normalizeIngredient(input, opts = {}) {
   if (typeof input === "string") {
     rawLine = input;
   } else if (input && typeof input === "object") {
-    const q = input.qty != null && (input.qty !== 1 || input.unit) ? input.qty + " " : "";
-    const u = input.unit ? input.unit + " " : "";
-    rawLine = `${q}${u}${input.name || ""}`.trim();
+    const nameStr = (input.name || "").trim();
+    // If the NAME itself begins with a quantity (and optionally a unit), the
+    // stored qty/unit is usually a mangled import artifact (e.g. stored qty 1.2
+    // but name "1.4 kg beef short ribs"). Trust the name — prepending the stored
+    // qty would create a double quantity ("1.2 1.4 kg ..."). Otherwise combine.
+    const nameHasLeadingQty = /^\s*[\d.,/½⅓⅔¼¾⅛]+\s*(?:g|kg|oz|lb|lbs?|ml|l|cups?|tbsp|tsp|cloves?|pieces?|cans?|x\b)?\s+\D/i.test(nameStr);
+    if (nameHasLeadingQty) {
+      rawLine = nameStr;
+    } else {
+      const q = input.qty != null && (input.qty !== 1 || input.unit) ? input.qty + " " : "";
+      const u = input.unit ? input.unit + " " : "";
+      rawLine = `${q}${u}${nameStr}`.trim();
+    }
   } else {
     return null;
   }
