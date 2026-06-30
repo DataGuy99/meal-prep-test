@@ -1151,9 +1151,18 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
         items.push(makeItem(need, Math.max(1, Math.round(count)), "", pantryItem, haveNote));
       }
       // Families that couldn't bridge (e.g. volume) show as separate lines.
+      // When the item ALSO emitted a primary count line above, two lines share
+      // the same headline name (e.g. garlic "×32" + garlic "8 tsp") and look
+      // like a duplicate. They aren't — they're different forms (whole cloves
+      // vs. measured/minced). Tag the secondary line with its form so the user
+      // sees they're distinct: "garlic — minced/measured (8 tsp)".
+      const emittedPrimaryCount = grams > 0.01;
       for (const fam of Object.keys(need.unbridged || {})) {
         const disp = prettyUnit(fam, need.unbridged[fam]);
-        if (disp.qty > 0.01) items.push(makeItem(need, round1(disp.qty), disp.unit, pantryItem, ""));
+        if (disp.qty > 0.01) {
+          const formNote = emittedPrimaryCount ? "by volume" : "";
+          items.push(makeItem(need, round1(disp.qty), disp.unit, pantryItem, "", formNote));
+        }
       }
     } else {
       // Weight/volume item: per-family lines (usually just one), pantry-subtracted.
@@ -1185,7 +1194,7 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
   return items;
 
   // Build a shopping item with composition (distinct contributing parts).
-  function makeItem(need, qty, unit, pantryItem, haveNote) {
+  function makeItem(need, qty, unit, pantryItem, haveNote, formNote) {
     const seen = new Set();
     const composition = [];
     for (const p of need.parts) {
@@ -1203,6 +1212,7 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
       checked: false,
       source: "plan",
       haveNote: haveNote || "",
+      formNote: formNote || "",
       ambiguous: need.ambiguous || false,
       composition: composition.length > 1 ? composition : [],
     };
@@ -3404,6 +3414,7 @@ function ShopTab({ plan, recipes, setRecipes, pantry, setPantry, spices, setSpic
                       </div>
                       <div style={{ flex:1, minWidth:0 }}>
                         <span style={{ fontSize:14, color:(item.checked&&!mergeMode)?COLORS.textSec:COLORS.text, textDecoration:(item.checked&&!mergeMode)?"line-through":"none" }}>{item.name}</span>
+                        {item.formNote && !mergeMode && <span style={{ fontSize:11, color:COLORS.textSec, fontStyle:"italic" }}> · {item.formNote}</span>}
                         {item.reason && !mergeMode && <div style={{ fontSize:9, color:COLORS.red }}>{item.reason}</div>}
                       </div>
                       <div style={{ textAlign:"right", flexShrink:0 }}>
