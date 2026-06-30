@@ -3811,13 +3811,15 @@ function PeopleSection({ people, setPeople }) {
                   <span style={{ fontSize:14, cursor:"pointer", color:COLORS.red }} onClick={() => removePerson(p.id)}>×</span>
                 </div>
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" }}>
-                  <select value={p.profile} onChange={e => { const npt = PROFILE_TYPES.find(x => x.key === e.target.value); updatePerson(p.id, { profile: npt.key, weight: npt.weight }); }} style={{ fontSize:12, padding:"4px 6px", borderRadius:5, border:`1px solid ${COLORS.border}`, background:"#fff" }}>
-                    {PROFILE_TYPES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
-                  </select>
+                  <div style={{ minWidth:90 }}>
+                    <PickList value={p.profile} onChange={v => { const npt = PROFILE_TYPES.find(x => x.key === v); updatePerson(p.id, { profile: npt.key, weight: npt.weight }); }}
+                      options={PROFILE_TYPES.map(t => ({ value: t.key, label: t.label }))} />
+                  </div>
                   <NumberInput value={p.weight} onCommit={v => updatePerson(p.id, { weight: v })} min={0} step="0.05" fallback={0} style={{ width:54, fontSize:12, padding:"4px 6px", borderRadius:5, border:`1px solid ${COLORS.border}`, textAlign:"center" }} title="portion weight" />
-                  <select value={att.key} onChange={e => { const na = ATTENDANCE.find(x => x.key === e.target.value); updatePerson(p.id, { attendance: na.factor }); }} style={{ fontSize:12, padding:"4px 6px", borderRadius:5, border:`1px solid ${COLORS.border}`, background:"#fff" }}>
-                    {ATTENDANCE.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}
-                  </select>
+                  <div style={{ minWidth:110 }}>
+                    <PickList value={att.key} onChange={v => { const na = ATTENDANCE.find(x => x.key === v); updatePerson(p.id, { attendance: na.factor }); }}
+                      options={ATTENDANCE.map(a => ({ value: a.key, label: a.label }))} />
+                  </div>
                 </div>
               </Card>
             );
@@ -3830,11 +3832,11 @@ function PeopleSection({ people, setPeople }) {
         <span style={{ fontSize:16, fontWeight:800, color:COLORS.boost }}>{demand > 0 ? demand.toFixed(2) : "—"}</span>
       </div>
 
-      <div style={{ display:"flex", gap:6 }}>
+      <div style={{ display:"flex", gap:6, alignItems:"center" }}>
         <input value={name} onChange={e => setName(e.target.value)} placeholder="Name..." style={{ flex:1, padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
-        <select value={profile} onChange={e => setProfile(e.target.value)} style={{ fontSize:13, padding:"4px 8px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, background:"#fff" }}>
-          {PROFILE_TYPES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
-        </select>
+        <div style={{ minWidth:96 }}>
+          <PickList value={profile} onChange={setProfile} options={PROFILE_TYPES.map(t => ({ value: t.key, label: t.label }))} />
+        </div>
         <Btn small onClick={addPerson}>Add</Btn>
       </div>
     </div>
@@ -4130,10 +4132,10 @@ function ExcludesSection({ excludes, onChange, people, ingredientPool = [] }) {
         )}
         <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
           <span style={{ fontSize:11, color:COLORS.textSec, fontWeight:600 }}>For:</span>
-          <select value={newScope} onChange={e => setNewScope(e.target.value)} style={{ fontSize:12, padding:"5px 8px", borderRadius:5, border:`1px solid ${COLORS.border}`, background:"#fff" }}>
-            <option value="all">Everyone</option>
-            {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
+          <div style={{ minWidth:110 }}>
+            <PickList value={newScope} onChange={setNewScope}
+              options={[{ value:"all", label:"Everyone" }, ...people.map(p => ({ value: p.id, label: p.name }))]} />
+          </div>
           <label style={{ display:"flex", alignItems:"center", gap:4, fontSize:12, cursor:"pointer" }}>
             <input type="checkbox" checked={permanent} onChange={e => setPermanent(e.target.checked)} /> Permanent
           </label>
