@@ -1528,6 +1528,8 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
   const [mealFilter, setMealFilter] = useState("all");    // all | breakfast | lunch | dinner
   const [expandedId, setExpandedId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [reviewItems, setReviewItems] = useState(null); // null = closed; array = reviewing parsed ingredients
+  const [reviewExpanded, setReviewExpanded] = useState({}); // review row idx -> expanded bool
   const [editId, setEditId] = useState(null); // recipe id being edited, or null for new
   const [addForm, setAddForm] = useState({ name:"", tags:[], mealTags:[], servings:4, slotsMin:2, slotsMax:4, stars:3, essentialText:"", secondaryText:"", instructions:"", url:"", role:"main" });
   const formRef = useRef(null);
@@ -1620,19 +1622,58 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
     setShowAdd(false);
     setEditId(null);
     setAddForm(blankForm);
+    setReviewItems(null);
+    setReviewExpanded({});
   }
 
-  function saveRecipe() {
-    const parseTier = (text, tier) => text.split("\n").map(parseIngredientLine).filter(Boolean)
-      .map(ing => ({ ...ing, name: findMatch(ing.name, dictionary), tier }));
-    const essentialIngs = parseTier(addForm.essentialText, "essential");
-    const secondaryIngs = parseTier(addForm.secondaryText, "secondary");
-    const newIngs = [...essentialIngs, ...secondaryIngs];
-    const newDict = [...new Set([...dictionary, ...newIngs.map(i => i.name)])];
+  // Stage 3: instead of saving immediately, parse the pasted ingredients into the
+  // schema and open the review popup. The user confirms/corrects, then commitRecipe
+  // does the actual save with confirmed:true.
+  function openReview() {
+    const parseTier = (text, tier) =>
+      String(text || "").split("\n").map(line => normalizeIngredient(line, { tier })).filter(Boolean);
+    const items = [...parseTier(addForm.essentialText, "essential"), ...parseTier(addForm.secondaryText, "secondary")];
+    if (items.length === 0) { saveRecipeRaw([]); return; } // nothing to review
+    setReviewItems(items);
+    setReviewExpanded({});
+  }
+
+  // Update one reviewed ingredient (from the expand-edit fields).
+  function updateReviewItem(idx, patch) {
+    setReviewItems(prev => prev.map((it, i) => {
+      if (i !== idx) return it;
+      const merged = { ...it, ...patch };
+      // Re-derive family/baseQty if unit changed; re-canonicalize if item text changed.
+      if (patch.unit !== undefined || patch.item !== undefined) {
+        const info = nUnitInfo(merged.unit);
+        merged.family = info.family.startsWith("count") ? "count" : info.family;
+        merged.baseQty = (parseFloat(merged.qty) || 1) * info.factor;
+      }
+      if (patch.qty !== undefined) {
+        const info = nUnitInfo(merged.unit);
+        merged.baseQty = (parseFloat(merged.qty) || 1) * info.factor;
+      }
+      return merged;
+    }));
+  }
+
+  function removeReviewItem(idx) {
+    setReviewItems(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  // Confirm the review and save the recipe with all ingredients marked confirmed.
+  function commitReview() {
+    const confirmed = reviewItems.map(it => ({ ...it, confirmed: true }));
+    saveRecipeRaw(confirmed);
+    setReviewItems(null);
+  }
+
+  // The actual save (was saveRecipe). Takes the final ingredient objects.
+  function saveRecipeRaw(newIngs) {
+    const newDict = [...new Set([...dictionary, ...newIngs.map(i => i.item || i.name)])];
     setDictionary(newDict);
 
-    // Check red list
-    const redHits = newIngs.filter(ing => settings.redList.some(rl => normalize(rl) === normalize(ing.name)));
+    const redHits = newIngs.filter(ing => settings.redList.some(rl => normalize(rl) === normalize(ing.item || ing.name)));
     const isQ = redHits.length > 0;
 
     const core = {
@@ -1643,11 +1684,10 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
       instructions: addForm.instructions.trim(),
       url: addForm.url.trim(),
       role: addForm.role || "main",
-      quarantineItems: redHits.map(r => ({ ingredient: r.name, sub: "" })),
+      quarantineItems: redHits.map(r => ({ ingredient: r.item || r.name, sub: "" })),
     };
 
     if (editId) {
-      // Update existing — preserve usage history, dates, shelving.
       setRecipes(prev => prev.map(r => r.id === editId ? { ...r, ...core } : r));
     } else {
       setRecipes(prev => [...prev, {
@@ -1787,7 +1827,7 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
                 <input type="url" inputMode="url" placeholder="https://..." value={addForm.url} onChange={e => setAddForm(p => ({ ...p, url: e.target.value }))} style={{ width:"100%", boxSizing:"border-box", padding:"8px 10px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
               </div>
               <div style={{ display:"flex", gap:8 }}>
-                <Btn style={{ flex:1 }} onClick={saveRecipe} disabled={!addForm.name.trim() || !addForm.essentialText.trim()}>{editId ? "Save Changes" : "Save Recipe"}</Btn>
+                <Btn style={{ flex:1 }} onClick={openReview} disabled={!addForm.name.trim() || !addForm.essentialText.trim()}>{editId ? "Review & Save" : "Review & Save"}</Btn>
                 <Btn variant="ghost" onClick={closeForm}>Cancel</Btn>
               </div>
             </div>
@@ -1892,10 +1932,11 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
                 </div>
                 {(() => {
                   const renderIng = (ing, idx) => {
-                    const isRed = settings.redList.some(rl => normalize(rl) === normalize(ing.name));
+                    const label = ing.itemDisplay || ing.item || ing.name;
+                    const isRed = settings.redList.some(rl => normalize(rl) === normalize(ing.item || ing.name));
                     return (
-                      <span key={idx} style={{ fontSize:12, padding:"3px 8px", borderRadius:4, background:isRed?COLORS.quarantineBg:"#fff", border:`1px solid ${isRed?COLORS.quarantine:COLORS.border}`, color:isRed?COLORS.quarantine:COLORS.text, fontWeight:isRed?600:400 }}>
-                        {isRed && "⚠ "}{ing.qty > 0 && ing.qty !== 1 ? ing.qty + " " : ""}{ing.unit ? ing.unit + " " : ""}{stripArtifacts(ing.name)}
+                      <span key={idx} style={{ fontSize:12, padding:"3px 8px", borderRadius:4, background:isRed?COLORS.quarantineBg:"#fff", border:`1px solid ${isRed?COLORS.quarantine:(ing.confirmed===false?COLORS.gold+"66":COLORS.border)}`, color:isRed?COLORS.quarantine:COLORS.text, fontWeight:isRed?600:400 }} title={ing.confirmed===false?"unconfirmed — edit the recipe to review":undefined}>
+                        {isRed && "⚠ "}{ing.confirmed===false && "• "}{ing.qty > 0 && ing.qty !== 1 ? round1(ing.qty) + " " : ""}{ing.unit ? ing.unit + " " : ""}{label}
                       </span>
                     );
                   };
@@ -1954,6 +1995,84 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
         }
         return <div style={{ display:"flex", flexDirection:"column", gap:8 }}>{filtered.map(renderCard)}</div>;
       })()}
+
+      {reviewItems && (
+        <div onClick={() => setReviewItems(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:60 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background:"#fff", width:"100%", maxWidth:520, maxHeight:"88vh", borderRadius:"16px 16px 0 0", display:"flex", flexDirection:"column", overflow:"hidden" }}>
+            <div style={{ padding:"16px 18px 10px", borderBottom:`1px solid ${COLORS.border}` }}>
+              <div style={{ fontSize:16, fontWeight:700, color:COLORS.primary }}>Review ingredients</div>
+              <div style={{ fontSize:12, color:COLORS.textSec, marginTop:3, lineHeight:1.4 }}>
+                {reviewItems.filter(i => i.uncertain).length > 0
+                  ? <>Check the <span style={{ color:COLORS.gold, fontWeight:700 }}>flagged</span> items below — tap any row to edit. The rest look good.</>
+                  : <>These all parsed cleanly. Tap any row to adjust before saving.</>}
+              </div>
+            </div>
+            <div style={{ overflowY:"auto", padding:"8px 12px", flex:1 }}>
+              {reviewItems.map((it, idx) => {
+                const expanded = reviewExpanded[idx];
+                return (
+                  <div key={idx} style={{ border:`1px solid ${it.uncertain ? COLORS.gold : COLORS.border}`, borderRadius:8, marginBottom:6, background: it.uncertain ? `${COLORS.gold}0c` : "#fff" }}>
+                    <div onClick={() => setReviewExpanded(p => ({ ...p, [idx]: !p[idx] }))} style={{ display:"flex", alignItems:"center", gap:8, padding:"9px 11px", cursor:"pointer" }}>
+                      {it.uncertain && <span style={{ color:COLORS.gold, fontSize:14 }} title={it.uncertainReason}>⚠</span>}
+                      <span style={{ flex:1, fontSize:14, fontWeight:600 }}>
+                        {it.qty && it.qty !== 1 ? <span style={{ color:COLORS.textSec }}>{round1(it.qty)} </span> : null}
+                        {it.unit ? <span style={{ color:COLORS.textSec }}>{it.unit} </span> : null}
+                        {it.itemDisplay || it.item}
+                      </span>
+                      {it.tier === "secondary" && <span style={{ fontSize:10, color:COLORS.textSec, border:`1px solid ${COLORS.border}`, borderRadius:4, padding:"1px 5px" }}>opt</span>}
+                      <span style={{ fontSize:12, color:COLORS.textSec }}>{expanded ? "▴" : "▾"}</span>
+                    </div>
+                    {it.uncertain && !expanded && (
+                      <div style={{ fontSize:11, color:COLORS.gold, padding:"0 11px 8px 33px" }}>{it.uncertainReason}</div>
+                    )}
+                    {expanded && (
+                      <div style={{ padding:"4px 11px 11px", borderTop:`1px solid ${COLORS.border}` }}>
+                        <div style={{ display:"flex", gap:6, marginBottom:7, marginTop:8 }}>
+                          <div style={{ flex:"0 0 64px" }}>
+                            <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>Qty</div>
+                            <input value={it.qty} onChange={e => updateReviewItem(idx, { qty: e.target.value })} inputMode="decimal" style={{ width:"100%", boxSizing:"border-box", padding:"7px 8px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
+                          </div>
+                          <div style={{ flex:"0 0 92px" }}>
+                            <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>Unit</div>
+                            <select value={it.unit} onChange={e => updateReviewItem(idx, { unit: e.target.value })} style={{ width:"100%", boxSizing:"border-box", padding:"7px 6px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, background:"#fff" }}>
+                              <option value="">(count)</option>
+                              <optgroup label="weight"><option value="g">g</option><option value="kg">kg</option><option value="oz">oz</option><option value="lb">lb</option></optgroup>
+                              <optgroup label="volume"><option value="ml">ml</option><option value="l">l</option><option value="tsp">tsp</option><option value="tbsp">tbsp</option><option value="cup">cup</option></optgroup>
+                              <optgroup label="count"><option value="clove">clove</option><option value="head">head</option><option value="dozen">dozen</option><option value="can">can</option><option value="bunch">bunch</option><option value="pack">pack</option><option value="stalk">stalk</option><option value="slice">slice</option></optgroup>
+                            </select>
+                          </div>
+                          <div style={{ flex:1 }}>
+                            <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>Item</div>
+                            <input value={it.itemDisplay || it.item} onChange={e => updateReviewItem(idx, { item: normalize(e.target.value), itemDisplay: e.target.value })} style={{ width:"100%", boxSizing:"border-box", padding:"7px 8px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13 }} />
+                          </div>
+                        </div>
+                        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
+                          <div style={{ display:"flex", gap:5 }}>
+                            {[["essential","Essential"],["secondary","Optional"]].map(([val,label]) => (
+                              <Btn key={val} small variant={it.tier===val?"primary":"ghost"} style={{ padding:"3px 9px", fontSize:11 }} onClick={() => updateReviewItem(idx, { tier: val })}>{label}</Btn>
+                            ))}
+                          </div>
+                          <Btn small variant="ghost" style={{ padding:"3px 9px", fontSize:11, color:COLORS.red, borderColor:COLORS.red }} onClick={() => removeReviewItem(idx)}>Remove</Btn>
+                        </div>
+                        {it.raw && it.raw !== (it.itemDisplay || it.item) && (
+                          <div style={{ fontSize:10, color:COLORS.textSec, marginTop:7 }}>as written: "{it.raw}"</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {reviewItems.length === 0 && (
+                <div style={{ textAlign:"center", padding:"20px", fontSize:13, color:COLORS.textSec }}>All ingredients removed. Add some back or cancel.</div>
+              )}
+            </div>
+            <div style={{ padding:"10px 14px 14px", borderTop:`1px solid ${COLORS.border}`, display:"flex", gap:8 }}>
+              <Btn variant="ghost" onClick={() => setReviewItems(null)}>Back</Btn>
+              <Btn style={{ flex:1 }} onClick={commitReview} disabled={reviewItems.length === 0}>{editId ? "Save changes" : "Save recipe"} ({reviewItems.length})</Btn>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

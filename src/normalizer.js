@@ -289,6 +289,16 @@ export function normalizeIngredient(input, opts = {}) {
     }
   }
 
+  // Uncertainty signal for the entry-review UI. Flags ingredients a human should
+  // eyeball: unknown item (not in our DB), ambiguous unit, suspicious leftover
+  // text (URL, symbols, very long), or a missing/empty item.
+  let uncertain = false, uncertainReason = "";
+  if (!item || item.length < 2) { uncertain = true; uncertainReason = "couldn't read the item"; }
+  else if (/https?:|www\.|\.com|\.net|\//.test(raw)) { uncertain = true; uncertainReason = "looks like a link, not an ingredient"; }
+  else if (item.split(/\s+/).length > 5 || item.length > 40) { uncertain = true; uncertainReason = "unusually long — may be a mis-paste"; }
+  else if (ambiguousUnit) { uncertain = true; uncertainReason = `"${unit}" size varies — confirm amount`; }
+  else if (!db) { uncertain = true; uncertainReason = "new item — confirm it's right"; }
+
   return {
     raw,
     qty: qty || 1,
@@ -305,6 +315,8 @@ export function normalizeIngredient(input, opts = {}) {
     subUnit,                 // "clove"/"head" when recognized, else null
     subUnitGrams,            // grams per sub-unit, for precise bridging
     neverBuy: NEVER_BUY.has(item),  // valid ingredient, but shopping skips it (water)
+    uncertain,               // entry-review should flag this one
+    uncertainReason,
   };
 }
 
