@@ -1676,7 +1676,7 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
   return (
     <div>
       <Notif notifications={[...quarNotifs, ...freqNotifs]} />
-      {recipes.length > 0 && (
+      {(recipes.length > 0 || showAdd) && (
         <>
           <div style={{ display:"flex", gap:6, marginBottom:8, flexWrap:"wrap" }}>
             {["all","favorites","quarantine"].map(f => (
@@ -1804,7 +1804,7 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
           <div style={{ fontSize:13, color:COLORS.textSec, marginBottom:18, lineHeight:1.45 }}>
             Recipes are the building blocks — once you've added a few, the planner can build meal plans and shopping lists for you.
           </div>
-          <Btn onClick={() => setShowAdd(true)} style={{ width:"100%" }}>+ Add a recipe</Btn>
+          <Btn onClick={() => { setEditId(null); setAddForm(blankForm); setShowAdd(true); }} style={{ width:"100%" }}>+ Add a recipe</Btn>
         </div>
       )}
       {(() => {
