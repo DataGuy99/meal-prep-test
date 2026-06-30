@@ -306,6 +306,7 @@ export function normalizeIngredient(input, opts = {}) {
     family,
     item,
     itemDisplay,
+    name: item,                  // back-compat alias = canonical item (matching code reads ing.name)
     tier,
     confirmed: false,        // becomes true only via the entry-review step
     baseQty,

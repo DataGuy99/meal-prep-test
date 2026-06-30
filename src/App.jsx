@@ -1596,8 +1596,9 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
     return ingredients
       .filter(i => (i.tier || "essential") === tier)
       .map(i => {
+        const label = i.itemDisplay || i.item || i.name || "";
         const showQty = i.qty && (i.qty !== 1 || i.unit);
-        return `${showQty ? i.qty + " " : ""}${i.unit ? i.unit + " " : ""}${i.name}`.trim();
+        return `${showQty ? i.qty + " " : ""}${i.unit ? i.unit + " " : ""}${label}`.trim();
       })
       .join("\n");
   }
@@ -4092,29 +4093,22 @@ function cleanRecipes(arr) {
     if (!r || !Array.isArray(r.ingredients)) return r;
     let changed = false;
     const ingredients = r.ingredients.map(ing => {
-      if (!ing || typeof ing.name !== "string") return ing;
-      const stripped = stripArtifacts(ing.name);
-      // Re-parse when the name still carries a leading quantity, a leading unit
-      // word ("teaspoon cumin"), or qty was never captured — i.e. a compound
-      // string from an old paste. Re-parsing splits qty/unit/name properly and
-      // strips prep clauses. Don't touch entries that already look clean.
-      const looksCompound =
-        ((ing.qty == null || ing.qty === 1) && !ing.unit && (startsWithQty(stripped) || startsWithUnitWord(stripped)));
-      if (looksCompound) {
-        const parsed = parseIngredientLine(stripped);
-        if (parsed && (parsed.qty !== 1 || parsed.unit || parsed.name !== normalize(stripped))) {
-          changed = true;
-          return { ...ing, qty: parsed.qty, unit: parsed.unit, name: parsed.name };
-        }
-      }
-      const cleaned = normalize(stripped);
-      if (cleaned !== ing.name) { changed = true; return { ...ing, name: cleaned }; }
-      return ing;
-    }).filter(ing => {
-      // Drop stored ingredients that are really section headers.
-      if (ing && typeof ing.name === "string" && isSectionHeader(ing.name)) { changed = true; return false; }
-      return true;
-    });
+      if (!ing) return ing;
+      // If the ingredient is already a clean schema object (has item + a real
+      // name), leave it. Otherwise re-normalize it through the schema — this
+      // repairs undefined/missing names AND upgrades legacy {qty,unit,name}
+      // entries to the full schema (carrying confirmed:false so they show the
+      // subtle review dot). Section headers normalize to null and get dropped.
+      const hasCleanSchema = ing.item && typeof ing.name === "string" && ing.name.length > 0 && ing.name !== "undefined" && ing.name !== "null";
+      if (hasCleanSchema) return ing;
+      // Garbage from the earlier ingsToText bug ("2 undefined") — drop it.
+      if (ing.name === "undefined" || ing.name === "null" || ing.item === "undefined") { changed = true; return null; }
+      const upgraded = normalizeIngredient(ing.name != null ? ing : { ...ing, name: ing.item || ing.itemDisplay || "" }, { tier: ing.tier });
+      if (!upgraded) { changed = true; return null; } // header/empty -> drop
+      changed = true;
+      // Preserve the user's confirmed flag if they'd already reviewed it.
+      return { ...upgraded, confirmed: ing.confirmed === true ? true : false };
+    }).filter(Boolean);
     return changed ? { ...r, ingredients } : r;
   });
 }
