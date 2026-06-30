@@ -1075,11 +1075,22 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
             soldAs: ing.soldAs, families: {}, parts: [], ambiguous: ing.ambiguousUnit,
           };
         }
+        const dbk = ITEM_DB[key];
+        // A bare count (no unit) on a WEIGHT-sold item is almost always a "to
+        // taste" / "a pinch" artifact (recipe wrote "salt" with qty 1). Don't let
+        // it become a phantom "xN" line. Flag the item as needed; if any real
+        // measured amount exists, that's what shows. If ONLY bare counts exist,
+        // we show a single "to taste" line instead of a summed count.
+        const isBareCount = ing.family === "count" && !ing.unit && !ing.subUnitGrams;
+        if (ing.soldAs === "weight" && isBareCount) {
+          needs[key].toTaste = true;
+          needs[key].parts.push({ label: ing.itemDisplay, qty: ing.qty, unit: ing.unit, raw: ing.raw });
+          continue;
+        }
         needs[key].families[ing.family] = (needs[key].families[ing.family] || 0) + ing.baseQty;
         // Accumulate a grams-equivalent for count<->weight bridging. Use precise
         // sub-unit weight (clove=5g) when known; else the item avg weight.
         if (needs[key].gramsEquiv == null) needs[key].gramsEquiv = 0;
-        const dbk = ITEM_DB[key];
         if (ing.family === "mass") {
           needs[key].gramsEquiv += ing.baseQty;
         } else if (ing.family === "count" && ing.subUnitGrams) {
@@ -1133,6 +1144,7 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
       }
     } else {
       // Weight/volume item: per-family lines (usually just one), pantry-subtracted.
+      let emittedAny = false;
       for (const fam of famNames) {
         let remaining = families[fam];
         let haveNote = "";
@@ -1147,7 +1159,13 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
         if (remaining > 0.01) {
           const disp = prettyUnit(fam, remaining);
           items.push(makeItem(need, round1(disp.qty), disp.unit, pantryItem, haveNote));
+          emittedAny = true;
         }
+      }
+      // If the item only ever appeared as bare "to taste" counts (no measured
+      // amount), show a single "to taste" line instead of a meaningless count.
+      if (!emittedAny && need.toTaste) {
+        items.push(makeItem(need, 1, "to taste", pantryItem, ""));
       }
     }
   }
