@@ -1440,6 +1440,51 @@ const SectionLabel = ({ children }) => (
   <div style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:1.2, color:COLORS.textSec, marginBottom:8, marginTop:16 }}>{children}</div>
 );
 
+// ---- Global in-app dialog system (replaces native confirm()/alert()) ----
+// Any code can call showConfirm({...}) / showAlert({...}) and a styled modal
+// appears (mounted once via <DialogHost/> at the app root). showConfirm returns
+// a Promise<boolean>; showAlert returns Promise<void>.
+let _dialogSub = null;
+let _dialogResolve = null;
+function _emitDialog(cfg) {
+  return new Promise(resolve => {
+    _dialogResolve = resolve;
+    if (_dialogSub) _dialogSub(cfg);
+  });
+}
+function showConfirm({ title, message, confirmText = "OK", cancelText = "Cancel", danger = false }) {
+  return _emitDialog({ kind: "confirm", title, message, confirmText, cancelText, danger });
+}
+function showAlert({ title, message, confirmText = "OK" }) {
+  return _emitDialog({ kind: "alert", title, message, confirmText });
+}
+function DialogHost() {
+  const [cfg, setCfg] = useState(null);
+  useEffect(() => { _dialogSub = setCfg; return () => { _dialogSub = null; }; }, []);
+  if (!cfg) return null;
+  const close = (result) => { setCfg(null); if (_dialogResolve) { _dialogResolve(result); _dialogResolve = null; } };
+  const accent = cfg.danger ? COLORS.red : COLORS.primary;
+  return (
+    <div onClick={() => close(cfg.kind === "confirm" ? false : undefined)}
+         style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:100, padding:24 }}>
+      <div onClick={e => e.stopPropagation()}
+           style={{ background:"#fff", borderRadius:14, maxWidth:380, width:"100%", boxShadow:"0 12px 40px rgba(0,0,0,0.25)", overflow:"hidden" }}>
+        <div style={{ height:4, background:accent }} />
+        <div style={{ padding:"18px 20px 20px" }}>
+          {cfg.title && <div style={{ fontSize:16, fontWeight:700, color:COLORS.text, marginBottom:8 }}>{cfg.title}</div>}
+          <div style={{ fontSize:14, color:COLORS.textSec, lineHeight:1.5, whiteSpace:"pre-line" }}>{cfg.message}</div>
+          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:20 }}>
+            {cfg.kind === "confirm" && (
+              <Btn variant="ghost" onClick={() => close(false)}>{cfg.cancelText}</Btn>
+            )}
+            <Btn variant={cfg.danger ? "danger" : "primary"} onClick={() => close(true)}>{cfg.confirmText}</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const Combobox = ({ options, value, onChange, placeholder, multi, selected = [] }) => {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -1704,7 +1749,12 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
     closeForm();
   }
 
-  function deleteRecipe(id) { setRecipes(prev => prev.filter(r => r.id !== id)); }
+  function deleteRecipe(id) {
+    const r = recipes.find(x => x.id === id);
+    showConfirm({ title: "Delete recipe?", message: `"${r?.name || "This recipe"}" will be permanently removed. This can't be undone.`, confirmText: "Delete", danger: true }).then(ok => {
+      if (ok) setRecipes(prev => prev.filter(r => r.id !== id));
+    });
+  }
 
   function resolveQuarantine(recipeId, ingredient, sub) {
     if (!sub.trim()) return;
@@ -2346,19 +2396,21 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
     const anyContent = DAYS.some(d => MEALS.some(m => slotEntries(plan?.[d]?.[m]).length > 0));
     if (!anyContent) return;
     const lockedCount = DAYS.reduce((a, d) => a + MEALS.filter(m => plan?.[d]?.[m]?.locked && slotEntries(plan[d][m]).length > 0).length, 0);
-    const msg = lockedCount > 0
-      ? `Clear the meal plan? ${lockedCount} locked meal${lockedCount > 1 ? "s" : ""} will be kept; everything else is emptied.`
-      : "Clear the whole meal plan? This empties every slot so you can plan a fresh week.";
-    if (!confirm(msg)) return;
-    setPlan(prev => {
-      const next = JSON.parse(JSON.stringify(prev));
-      for (const d of DAYS) for (const m of MEALS) {
-        if (next[d]?.[m]?.locked && slotEntries(next[d][m]).length > 0) continue; // keep locked
-        if (next[d]) next[d][m] = null;
-      }
-      return next;
+    const message = lockedCount > 0
+      ? `${lockedCount} locked meal${lockedCount > 1 ? "s" : ""} will be kept; everything else is emptied so you can plan a fresh week.`
+      : "This empties every slot so you can plan a fresh week.";
+    showConfirm({ title: "Clear the meal plan?", message, confirmText: "Clear", danger: true }).then(ok => {
+      if (!ok) return;
+      setPlan(prev => {
+        const next = JSON.parse(JSON.stringify(prev));
+        for (const d of DAYS) for (const m of MEALS) {
+          if (next[d]?.[m]?.locked && slotEntries(next[d][m]).length > 0) continue; // keep locked
+          if (next[d]) next[d][m] = null;
+        }
+        return next;
+      });
+      setSelectedSlot(null);
     });
-    setSelectedSlot(null);
   }
 
   function doGenerate() {
@@ -4073,26 +4125,28 @@ function DataSection() {
     reader.onload = (e) => {
       let data;
       try { data = JSON.parse(e.target.result); }
-      catch (err) { alert("Import failed: that file isn't valid JSON.\n\n(" + err.message + ")"); return; }
-      if (!data || typeof data !== "object") { alert("Import failed: the file didn't contain a backup object."); return; }
-      // Only accept prep_ keys; report what was found so a bad file is obvious.
+      catch (err) { showAlert({ title: "Import failed", message: "That file isn't valid JSON.\n\n(" + err.message + ")" }); return; }
+      if (!data || typeof data !== "object") { showAlert({ title: "Import failed", message: "The file didn't contain a backup object." }); return; }
       const keys = Object.keys(data).filter(k => k.startsWith("prep_"));
-      if (keys.length === 0) { alert("Import failed: no Prep data found in that file (expected keys like prep_recipes)."); return; }
+      if (keys.length === 0) { showAlert({ title: "Import failed", message: "No Prep data found in that file (expected keys like prep_recipes)." }); return; }
       const recipeCount = Array.isArray(data.prep_recipes) ? data.prep_recipes.length : 0;
-      if (!confirm(`Import this backup?\n\nFound: ${keys.length} data sections` + (recipeCount ? `, ${recipeCount} recipes` : "") + `.\n\nThis REPLACES your current data in this app. Export your own backup first if you want to keep it.`)) return;
-      try {
-        keys.forEach(k => localStorage.setItem(k, JSON.stringify(data[k])));
-        alert("Imported successfully. Reloading.");
-        window.location.reload();
-      } catch (err) {
-        alert("Import wrote partially but hit an error (storage may be full):\n\n" + err.message);
-      }
+      const found = `Found ${keys.length} data section${keys.length > 1 ? "s" : ""}` + (recipeCount ? `, ${recipeCount} recipes` : "") + ".";
+      showConfirm({ title: "Import this backup?", message: `${found}\n\nThis REPLACES your current data in this app. Export your own backup first if you want to keep it.`, confirmText: "Import", danger: true }).then(ok => {
+        if (!ok) return;
+        try {
+          keys.forEach(k => localStorage.setItem(k, JSON.stringify(data[k])));
+          showAlert({ title: "Imported", message: "Imported successfully. Reloading now." }).then(() => window.location.reload());
+        } catch (err) {
+          showAlert({ title: "Partial import", message: "Import wrote partially but hit an error (storage may be full):\n\n" + err.message });
+        }
+      });
     };
-    reader.onerror = () => alert("Import failed: couldn't read the file.");
+    reader.onerror = () => showAlert({ title: "Import failed", message: "Couldn't read the file." });
     reader.readAsText(file);
   }
   function clearAll() {
-    if (confirm("Delete ALL data? This cannot be undone.")) {
+    showConfirm({ title: "Delete ALL data?", message: "This permanently deletes every recipe, pantry item, plan, and setting in this app. This cannot be undone.", confirmText: "Delete everything", danger: true }).then(ok => {
+      if (!ok) return;
       const keys = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
@@ -4100,7 +4154,7 @@ function DataSection() {
       }
       keys.forEach(k => localStorage.removeItem(k));
       window.location.reload();
-    }
+    });
   }
   return (
     <div>
@@ -4327,6 +4381,7 @@ export default function App() {
           onClose={() => { setSeenSurvey(true); save("seenSurvey", true); }}
         />
       )}
+      <DialogHost />
     </div>
   );
 }
