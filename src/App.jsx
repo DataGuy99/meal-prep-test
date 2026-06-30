@@ -32,6 +32,14 @@ const SC = {
   cold: { bg: COLORS.coldBg, fg: COLORS.cold, label: "Cold" },
   frozen: { bg: COLORS.frozenBg, fg: COLORS.frozen, label: "Frozen" },
 };
+// Grouped unit options for the PickList unit pickers (fixed set — the app does
+// conversion math on these, so users pick from the list rather than add new).
+const UNIT_PICK_OPTIONS = [
+  { group: null, items: [{ value: "", label: "(count)" }, { value: "pcs", label: "pcs" }] },
+  { group: "Weight", items: ["g", "kg", "oz", "lb"] },
+  { group: "Volume", items: ["ml", "l", "tsp", "tbsp", "cup"] },
+  { group: "Count", items: ["dozen", "can", "bottle", "bag", "bunch", "head", "pack", "jar", "stalk", "slice", "block"] },
+];
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const MEALS = ["Breakfast","Lunch","Dinner"];
 const TABS = ["Recipes","Plan","Shop","Pantry","Settings"];
@@ -1485,7 +1493,7 @@ function DialogHost() {
   );
 }
 
-const Combobox = ({ options, value, onChange, placeholder, multi, selected = [] }) => {
+const Combobox = ({ options, value, onChange, placeholder, multi, selected = [], noAdd = false }) => {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const ref = useRef();
@@ -1506,7 +1514,7 @@ const Combobox = ({ options, value, onChange, placeholder, multi, selected = [] 
         {open && (
           <div style={{ position:"absolute", top:"100%", left:0, right:0, maxHeight:160, overflowY:"auto", background:"#fff", border:`1px solid ${COLORS.border}`, borderRadius:6, marginTop:2, zIndex:10, boxShadow:"0 4px 12px rgba(0,0,0,0.08)" }}>
             {filtered.map(o => <div key={o} onClick={() => { onChange([...selected, o]); setSearch(""); }} style={{ padding:"8px 10px", cursor:"pointer", fontSize:13 }}>{o}</div>)}
-            {filtered.length === 0 && search && <div onClick={() => { onChange([...selected, search.toLowerCase().trim()]); setSearch(""); }} style={{ padding:"8px 10px", cursor:"pointer", fontSize:13, color:COLORS.primary, fontWeight:600 }}>+ Add "{search.toLowerCase().trim()}"</div>}
+            {filtered.length === 0 && search && !noAdd && <div onClick={() => { onChange([...selected, search.toLowerCase().trim()]); setSearch(""); }} style={{ padding:"8px 10px", cursor:"pointer", fontSize:13, color:COLORS.primary, fontWeight:600 }}>+ Add "{search.toLowerCase().trim()}"</div>}
           </div>
         )}
       </div>
@@ -1519,7 +1527,78 @@ const Combobox = ({ options, value, onChange, placeholder, multi, selected = [] 
       {open && (
         <div style={{ position:"absolute", top:"100%", left:0, right:0, maxHeight:160, overflowY:"auto", background:"#fff", border:`1px solid ${COLORS.border}`, borderRadius:6, marginTop:2, zIndex:10, boxShadow:"0 4px 12px rgba(0,0,0,0.08)" }}>
           {filtered.map(o => <div key={o} onClick={() => { onChange(o); setOpen(false); setSearch(""); }} style={{ padding:"8px 10px", cursor:"pointer", fontSize:13, background:o===value?COLORS.surface:"transparent" }}>{o}</div>)}
-          {filtered.length === 0 && search && <div onClick={() => { onChange(search.toLowerCase().trim()); setOpen(false); setSearch(""); }} style={{ padding:"8px 10px", cursor:"pointer", fontSize:13, color:COLORS.primary, fontWeight:600 }}>+ Add "{search.toLowerCase().trim()}"</div>}
+          {filtered.length === 0 && search && !noAdd && <div onClick={() => { onChange(search.toLowerCase().trim()); setOpen(false); setSearch(""); }} style={{ padding:"8px 10px", cursor:"pointer", fontSize:13, color:COLORS.primary, fontWeight:600 }}>+ Add "{search.toLowerCase().trim()}"</div>}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Light-themed, searchable single-select to replace native <select> (which the
+// OS renders as an ugly full-screen dark sheet). Matches the app's look.
+// - options: array of strings OR { value, label } OR { group, items:[...] } for sections
+// - allowAdd: typing a value not in the list offers "+ Add ..." (tags only)
+const PickList = ({ options, value, onChange, placeholder = "Select…", allowAdd = false, style, accent = false }) => {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef();
+  useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) { setOpen(false); setSearch(""); } }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
+
+  const groups = [];
+  const flat = [];
+  for (const o of options) {
+    if (o && typeof o === "object" && Array.isArray(o.items)) {
+      const items = o.items.map(it => (typeof it === "object" ? it : { value: it, label: it }));
+      groups.push({ group: o.group, items });
+      items.forEach(it => flat.push({ ...it, group: o.group }));
+    } else {
+      const it = typeof o === "object" ? o : { value: o, label: o };
+      groups.push({ group: null, items: [it] });
+      flat.push(it);
+    }
+  }
+  const selectedLabel = flat.find(o => o.value === value)?.label ?? value ?? "";
+  const q = search.toLowerCase().trim();
+  const match = (it) => it.label.toLowerCase().includes(q);
+  const anyMatch = flat.some(match);
+
+  return (
+    <div ref={ref} style={{ position:"relative", width:"100%" }}>
+      <div onClick={() => { setOpen(o => !o); setSearch(""); }}
+           style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:6, padding:"8px 10px", borderRadius:6, border:`1.5px solid ${accent ? COLORS.primary : COLORS.border}`, fontSize:13, background:"#fff", cursor:"pointer", color:accent ? COLORS.primary : COLORS.text, fontWeight:accent ? 600 : 400, boxSizing:"border-box", ...style }}>
+        <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{selectedLabel || placeholder}</span>
+        <span style={{ fontSize:10, color:COLORS.textSec, flexShrink:0 }}>▾</span>
+      </div>
+      {open && (
+        <div style={{ position:"absolute", top:"100%", left:0, right:0, maxHeight:260, overflowY:"auto", background:"#fff", border:`1px solid ${COLORS.border}`, borderRadius:8, marginTop:3, zIndex:30, boxShadow:"0 6px 20px rgba(0,0,0,0.12)" }}>
+          <div style={{ position:"sticky", top:0, background:"#fff", padding:6, borderBottom:`1px solid ${COLORS.border}` }}>
+            <input autoFocus value={search} onChange={e => setSearch(e.target.value)} placeholder="Type to filter…"
+                   style={{ width:"100%", boxSizing:"border-box", padding:"6px 8px", borderRadius:5, border:`1px solid ${COLORS.border}`, fontSize:13, outline:"none" }} />
+          </div>
+          {groups.map((g, gi) => {
+            const items = g.items.filter(match);
+            if (items.length === 0) return null;
+            return (
+              <div key={gi}>
+                {g.group && <div style={{ fontSize:10, fontWeight:700, textTransform:"uppercase", letterSpacing:0.8, color:COLORS.textSec, padding:"6px 10px 2px" }}>{g.group}</div>}
+                {items.map(it => (
+                  <div key={it.value} onClick={() => { onChange(it.value); setOpen(false); setSearch(""); }}
+                       style={{ padding:"9px 10px", cursor:"pointer", fontSize:13, fontWeight:it.value===value?700:400, color:it.value===value?COLORS.primary:COLORS.text, background:it.value===value?COLORS.surface:"transparent" }}>
+                    {it.label}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          {allowAdd && q && !anyMatch && (
+            <div onClick={() => { onChange(q); setOpen(false); setSearch(""); }}
+                 style={{ padding:"9px 10px", cursor:"pointer", fontSize:13, color:COLORS.primary, fontWeight:600, borderTop:`1px solid ${COLORS.border}` }}>
+              + Add "{q}"
+            </div>
+          )}
+          {!anyMatch && !(allowAdd && q) && (
+            <div style={{ padding:"10px", fontSize:12, color:COLORS.textSec, textAlign:"center" }}>No matches</div>
+          )}
         </div>
       )}
     </div>
@@ -1790,21 +1869,18 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
             <Btn small variant={grouped?"primary":"ghost"} onClick={() => setGrouped(g => !g)} title="Group by category">⊞ Group</Btn>
           </div>
           <div style={{ display:"flex", gap:6, marginBottom:14, flexWrap:"wrap" }}>
-            <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} style={{ flex:"1 1 auto", minWidth:90, padding:"7px 8px", borderRadius:6, border:`1.5px solid ${roleFilter!=="all"?COLORS.primary:COLORS.border}`, fontSize:12, background:"#fff", color:roleFilter!=="all"?COLORS.primary:COLORS.text, fontWeight:roleFilter!=="all"?600:400 }}>
-              <option value="all">All dishes</option>
-              <option value="main">Mains only</option>
-              <option value="side">Sides only</option>
-            </select>
-            <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} disabled={tagOptions.length===0} style={{ flex:"1 1 auto", minWidth:90, padding:"7px 8px", borderRadius:6, border:`1.5px solid ${tagFilter!=="all"?COLORS.primary:COLORS.border}`, fontSize:12, background:"#fff", color:tagFilter!=="all"?COLORS.primary:COLORS.text, fontWeight:tagFilter!=="all"?600:400 }}>
-              <option value="all">Any tag</option>
-              {tagOptions.map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
-            <select value={mealFilter} onChange={e => setMealFilter(e.target.value)} style={{ flex:"1 1 auto", minWidth:90, padding:"7px 8px", borderRadius:6, border:`1.5px solid ${mealFilter!=="all"?COLORS.primary:COLORS.border}`, fontSize:12, background:"#fff", color:mealFilter!=="all"?COLORS.primary:COLORS.text, fontWeight:mealFilter!=="all"?600:400 }}>
-              <option value="all">Any meal</option>
-              <option value="breakfast">Breakfast</option>
-              <option value="lunch">Lunch</option>
-              <option value="dinner">Dinner</option>
-            </select>
+            <div style={{ flex:"1 1 auto", minWidth:90 }}>
+              <PickList value={roleFilter} accent={roleFilter!=="all"} onChange={setRoleFilter}
+                options={[{ value:"all", label:"All dishes" }, { value:"main", label:"Mains only" }, { value:"side", label:"Sides only" }]} />
+            </div>
+            <div style={{ flex:"1 1 auto", minWidth:90 }}>
+              <PickList value={tagFilter} accent={tagFilter!=="all"} onChange={setTagFilter}
+                options={[{ value:"all", label:"Any tag" }, ...tagOptions.map(t => ({ value:t, label:t }))]} />
+            </div>
+            <div style={{ flex:"1 1 auto", minWidth:90 }}>
+              <PickList value={mealFilter} accent={mealFilter!=="all"} onChange={setMealFilter}
+                options={[{ value:"all", label:"Any meal" }, { value:"breakfast", label:"Breakfast" }, { value:"lunch", label:"Lunch" }, { value:"dinner", label:"Dinner" }]} />
+            </div>
             {(roleFilter!=="all" || tagFilter!=="all" || mealFilter!=="all") && (
               <Btn small variant="ghost" onClick={() => { setRoleFilter("all"); setTagFilter("all"); setMealFilter("all"); }}>Clear</Btn>
             )}
@@ -1842,7 +1918,7 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
               </div>
               <div>
                 <div style={{ fontSize:11, color:COLORS.textSec, marginBottom:3, fontWeight:600 }}>Meal suitability</div>
-                <Combobox multi options={["breakfast","lunch","dinner"]} placeholder="breakfast, lunch, dinner..." selected={addForm.mealTags} onChange={v => setAddForm(p => ({ ...p, mealTags: v }))} />
+                <Combobox multi noAdd options={["breakfast","lunch","dinner"]} placeholder="breakfast, lunch, dinner..." selected={addForm.mealTags} onChange={v => setAddForm(p => ({ ...p, mealTags: v }))} />
               </div>
               <div style={{ display:"flex", gap:8 }}>
                 <div style={{ flex:1 }}>
@@ -2090,12 +2166,7 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
                           </div>
                           <div style={{ flex:"0 0 92px" }}>
                             <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>Unit</div>
-                            <select value={it.unit} onChange={e => updateReviewItem(idx, { unit: e.target.value })} style={{ width:"100%", boxSizing:"border-box", padding:"7px 6px", borderRadius:6, border:`1.5px solid ${COLORS.border}`, fontSize:13, background:"#fff" }}>
-                              <option value="">(count)</option>
-                              <optgroup label="weight"><option value="g">g</option><option value="kg">kg</option><option value="oz">oz</option><option value="lb">lb</option></optgroup>
-                              <optgroup label="volume"><option value="ml">ml</option><option value="l">l</option><option value="tsp">tsp</option><option value="tbsp">tbsp</option><option value="cup">cup</option></optgroup>
-                              <optgroup label="count"><option value="clove">clove</option><option value="head">head</option><option value="dozen">dozen</option><option value="can">can</option><option value="bunch">bunch</option><option value="pack">pack</option><option value="stalk">stalk</option><option value="slice">slice</option></optgroup>
-                            </select>
+                            <PickList value={it.unit} onChange={v => updateReviewItem(idx, { unit: v })} options={UNIT_PICK_OPTIONS} />
                           </div>
                           <div style={{ flex:1 }}>
                             <div style={{ fontSize:10, color:COLORS.textSec, marginBottom:3 }}>Item</div>
@@ -3569,15 +3640,9 @@ function PantryTab({ pantry, setPantry, spices, setSpices }) {
                     <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Qty</div>
                     <NumberInput value={item.qty} onCommit={v => updateItem(item.id, { qty: v })} min={0} fallback={0} style={{ width:56, padding:"5px 6px", borderRadius:5, border:`1.5px solid ${COLORS.border}`, fontSize:14, textAlign:"center", fontWeight:600 }} />
                   </div>
-                  <div>
+                  <div style={{ minWidth:96 }}>
                     <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Unit</div>
-                    <select value={item.unit || ""} onChange={e => updateItem(item.id, { unit: e.target.value })} style={{ padding:"6px 4px", borderRadius:5, border:`1.5px solid ${COLORS.border}`, fontSize:13, background:"#fff", maxWidth:90 }}>
-                      <option value="">(count)</option>
-                      <option value="pcs">pcs</option>
-                      <optgroup label="weight"><option value="g">g</option><option value="kg">kg</option><option value="oz">oz</option><option value="lb">lb</option></optgroup>
-                      <optgroup label="volume"><option value="ml">ml</option><option value="l">l</option><option value="tsp">tsp</option><option value="tbsp">tbsp</option><option value="cup">cup</option></optgroup>
-                      <optgroup label="count"><option value="dozen">dozen</option><option value="can">can</option><option value="bottle">bottle</option><option value="bag">bag</option><option value="bunch">bunch</option><option value="head">head</option><option value="pack">pack</option><option value="jar">jar</option></optgroup>
-                    </select>
+                    <PickList value={item.unit || ""} onChange={v => updateItem(item.id, { unit: v })} options={UNIT_PICK_OPTIONS} />
                   </div>
                   <div>
                     <div style={{ fontSize:10, fontWeight:600, color:COLORS.textSec, marginBottom:2 }}>Floor</div>
