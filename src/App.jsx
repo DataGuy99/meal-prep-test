@@ -1178,7 +1178,7 @@ function generateShoppingList(plan, recipes, pantry, excludes = [], activePerson
       // If the item only ever appeared as bare "to taste" counts (no measured
       // amount), show a single "to taste" line instead of a meaningless count.
       if (!emittedAny && need.toTaste) {
-        items.push(makeItem(need, 1, "to taste", pantryItem, ""));
+        items.push(makeItem(need, null, "to taste", pantryItem, ""));
       }
     }
   }
@@ -3407,7 +3407,7 @@ function ShopTab({ plan, recipes, setRecipes, pantry, setPantry, spices, setSpic
                         {item.reason && !mergeMode && <div style={{ fontSize:9, color:COLORS.red }}>{item.reason}</div>}
                       </div>
                       <div style={{ textAlign:"right", flexShrink:0 }}>
-                        <div style={{ fontSize:12, color:COLORS.textSec }}>{item.unit ? `${item.qty} ${item.unit}` : `×${item.qty}`}</div>
+                        <div style={{ fontSize:12, color:COLORS.textSec }}>{(item.qty == null || item.qty === "") ? (item.unit || "") : item.unit ? `${item.qty} ${item.unit}` : `×${item.qty}`}</div>
                         {groupBy==="category" && item.store && !mergeMode && <div style={{ fontSize:9, color:COLORS.textSec }}>{item.store}</div>}
                       </div>
                     </div>
