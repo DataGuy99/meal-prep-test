@@ -1685,9 +1685,16 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
     if (tagFilter !== "all" && !tagOptions.includes(tagFilter)) setTagFilter("all");
   }, [tagOptions, tagFilter]);
 
+  // A recipe "needs review" if any ingredient is flagged uncertain (URL,
+  // run-on, unknown item, etc.) AND the recipe hasn't been confirmed yet.
+  // These are typically imported recipes that never went through entry-review.
+  const recipeNeedsReview = (r) => (r.ingredients || []).some(i => i && i.uncertain && i.confirmed !== true);
+  const reviewCount = recipes.filter(recipeNeedsReview).length;
+
   const filtered = recipes.filter(r => {
     if (filter === "favorites" && !(r.stars >= 4)) return false;
     if (filter === "quarantine" && !r.quarantine) return false;
+    if (filter === "review" && !recipeNeedsReview(r)) return false;
     if (roleFilter !== "all" && (r.role || "main") !== roleFilter) return false;
     if (tagFilter !== "all" && !(r.tags || []).includes(tagFilter)) return false;
     if (mealFilter !== "all" && !(r.mealTags || []).includes(mealFilter)) return false;
@@ -1870,6 +1877,22 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
               </Btn>
             ))}
           </div>
+          {reviewCount > 0 && filter !== "review" && (
+            <div onClick={() => setFilter("review")}
+                 style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 12px", marginBottom:10, background:`${COLORS.gold}14`, border:`1px solid ${COLORS.gold}55`, borderRadius:8, cursor:"pointer" }}>
+              <span style={{ fontSize:16 }}>⚠️</span>
+              <div style={{ flex:1, fontSize:12.5, color:COLORS.text, lineHeight:1.4 }}>
+                <b>{reviewCount} recipe{reviewCount>1?"s":""} need{reviewCount>1?"":"s"} review.</b> Some ingredients look off (links, typos, or run-on text). Tap to see them, then edit to fix.
+              </div>
+              <span style={{ fontSize:13, color:COLORS.gold, fontWeight:700, flexShrink:0 }}>Review →</span>
+            </div>
+          )}
+          {filter === "review" && (
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, padding:"8px 12px", marginBottom:10, background:`${COLORS.gold}14`, border:`1px solid ${COLORS.gold}55`, borderRadius:8 }}>
+              <span style={{ fontSize:12.5, color:COLORS.text }}>Showing {reviewCount} recipe{reviewCount>1?"s":""} with flagged ingredients. Open one and tap <b>Edit</b> to fix.</span>
+              <Btn small variant="ghost" onClick={() => setFilter("all")}>Done</Btn>
+            </div>
+          )}
           <div style={{ display:"flex", gap:8, marginBottom:14, alignItems:"center" }}>
             <div style={{ flex:1, position:"relative" }}>
               <span style={{ position:"absolute", left:10, top:"50%", transform:"translateY(-50%)", fontSize:13, color:COLORS.textSec, pointerEvents:"none" }}>🔍</span>
@@ -2076,9 +2099,12 @@ function RecipesTab({ recipes, setRecipes, settings, setSettings, dictionary, se
                   const renderIng = (ing, idx) => {
                     const label = ing.itemDisplay || ing.item || ing.name;
                     const isRed = settings.redList.some(rl => normalize(rl) === normalize(ing.item || ing.name));
+                    const isUncertain = ing.uncertain && ing.confirmed !== true;
+                    const borderCol = isRed ? COLORS.quarantine : isUncertain ? COLORS.gold : (ing.confirmed===false ? COLORS.gold+"66" : COLORS.border);
+                    const bgCol = isRed ? COLORS.quarantineBg : isUncertain ? `${COLORS.gold}1a` : "#fff";
                     return (
-                      <span key={idx} style={{ fontSize:12, padding:"3px 8px", borderRadius:4, background:isRed?COLORS.quarantineBg:"#fff", border:`1px solid ${isRed?COLORS.quarantine:(ing.confirmed===false?COLORS.gold+"66":COLORS.border)}`, color:isRed?COLORS.quarantine:COLORS.text, fontWeight:isRed?600:400 }} title={ing.confirmed===false?"unconfirmed — edit the recipe to review":undefined}>
-                        {isRed && "⚠ "}{ing.confirmed===false && "• "}{ing.qty > 0 && ing.qty !== 1 ? round1(ing.qty) + " " : ""}{ing.unit ? ing.unit + " " : ""}{label}
+                      <span key={idx} style={{ fontSize:12, padding:"3px 8px", borderRadius:4, background:bgCol, border:`1px solid ${borderCol}`, color:isRed?COLORS.quarantine:COLORS.text, fontWeight:(isRed||isUncertain)?600:400 }} title={isUncertain?ing.uncertainReason:(ing.confirmed===false?"unconfirmed — edit the recipe to review":undefined)}>
+                        {isRed && "⚠ "}{isUncertain && "⚠ "}{!isUncertain && ing.confirmed===false && "• "}{ing.qty > 0 && ing.qty !== 1 ? round1(ing.qty) + " " : ""}{ing.unit ? ing.unit + " " : ""}{label}
                       </span>
                     );
                   };
