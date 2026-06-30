@@ -77,7 +77,7 @@ const UNIT_WORD_MAP = {
   clove: "clove", cloves: "clove", stalk: "stalk", stalks: "stalk",
   slice: "slice", slices: "slice", piece: "pc", pieces: "pc", pc: "pc", pcs: "pc",
   bunch: "bunch", bunches: "bunch", block: "block", blocks: "block",
-  fillet: "fillet", fillets: "fillet", dozen: "dozen", pinch: "pinch", dash: "dash",
+  fillet: "fillet", fillets: "fillet", dozen: "dozen", doz: "dozen", dz: "dozen", pinch: "pinch", dash: "dash",
   jar: "jar", jars: "jar", package: "package", packages: "package", pack: "pack", packs: "pack",
   container: "container", containers: "container", box: "box", boxes: "box",
   sprig: "sprig", sprigs: "sprig", handful: "handful", stick: "stick", sticks: "stick",

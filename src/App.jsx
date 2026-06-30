@@ -2015,31 +2015,28 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
       const linked = pantry.find(p => p.id === linkedId);
       if (linked) return linked;
     }
-    let m = pantry.find(p => normalize(p.name) === ni);
+    // 2. Canonical-item match (Stage 2b): normalize the recipe ingredient AND each
+    //    pantry item to their canonical `item` and match on that. This is the same
+    //    clean identity the shopping list merges by, so cook/shop agree.
+    const ing = normalizeIngredient(ingName);
+    const ingItem = ing ? ing.item : ni;
+    let m = pantry.find(p => {
+      const pn = normalizeIngredient(p);
+      return pn && pn.item === ingItem;
+    });
     if (m) return m;
-    // Strip parentheticals, a leading quantity/unit, and anything after a
-    // comma/dash qualifier — leaving the core item name.
-    const base = normalize(
-      String(ingName)
-        .replace(/\([^)]*\)/g, " ")     // remove (9.2 oz), (3 cups), etc.
-        .replace(/^\s*[\d.\/]+\s*(?:g|kg|oz|lb|lbs?|ml|l|cups?|tbsp|tsp|cloves?|stalks?|slices?|pieces?|pcs?|cans?|bunch(?:es)?|heads?)?\s+/i, "") // strip leading "260 g", "2 cloves", "12"
-        .split(/[,–—-]/)[0]             // take part before a comma/dash qualifier
-        .trim()
-    );
-    if (base && base !== ni) {
-      m = pantry.find(p => normalize(p.name) === base);
-      if (m) return m;
-    }
-    // Substring match both directions, on the base name (longest pantry match wins
-    // so "brown sugar" beats "sugar" when both are present).
-    const key = base || ni;
+    // 3. Exact normalized-name fallback.
+    m = pantry.find(p => normalize(p.name) === ni);
+    if (m) return m;
+    // 4. Substring match (longest pantry name wins so "brown sugar" beats "sugar").
+    const key = ingItem || ni;
     if (key) {
       const subs = pantry.filter(p => {
-        const np = normalize(p.name);
+        const np = normalizeIngredient(p)?.item || normalize(p.name);
         return np === key || np.includes(key) || key.includes(np);
       });
       if (subs.length) {
-        subs.sort((a, b) => normalize(b.name).length - normalize(a.name).length);
+        subs.sort((a, b) => (normalizeIngredient(b)?.item || "").length - (normalizeIngredient(a)?.item || "").length);
         return subs[0];
       }
     }
@@ -2049,35 +2046,31 @@ function PlanTab({ recipes, setRecipes, plan, setPlan, settings, pantry, setPant
   function buildCookLines(recipe) {
     const factor = scaleFor(recipe);
     const tracked = [], spices = [], untracked = [];
-    for (const ing of (recipe.ingredients || [])) {
-      const cat = guessCategory(ing.name);
-      if (cat === "Spices") { spices.push(ing.name); continue; }
+    for (const rawIng of (recipe.ingredients || [])) {
+      const ing = normalizeIngredient(rawIng);
+      if (!ing) continue;                       // header / empty
+      if (ing.neverBuy) continue;               // water etc.
+      if (ing.category === "Spices") { spices.push(ing.itemDisplay); continue; }
       const need = (ing.qty || 1) * factor;
-      const pItem = findPantryMatch(ing.name);
+      const pItem = findPantryMatch(rawIng.name || ing.item);
       if (pItem) {
-        const info = unitInfo(ing.unit), pInfo = unitInfo(pItem.unit);
-        // Two count families unify even when one is generic "count" and the
-        // other an isolated "count:x" — fall back to treating both as singles.
-        const bothCountish = info.family.startsWith("count") && pInfo.family.startsWith("count");
-        const sameFamily = info.family === pInfo.family;
+        const pn = normalizeIngredient(pItem);
+        const bothCountish = ing.family.startsWith("count") && pn.family.startsWith("count");
+        const sameFamily = ing.family === pn.family;
         if (sameFamily || bothCountish) {
-          // Convert the needed amount to base units using the recipe unit's
-          // factor, then express the deduction in the PANTRY unit via its factor.
-          // Works uniformly for mass (g), volume (ml), and count (singles):
-          // "4 eggs" = 4 base; pantry "2 dozen" = 24 base; deduct 4 -> 20 base
-          // = 1.67 dozen.
-          const rFactor = sameFamily ? info.factor : 1;   // if not same family, both are singles
-          const pFactor = sameFamily ? pInfo.factor : (PLAIN_COUNT_LABELS.has((pItem.unit||"").toLowerCase().trim()) ? 1 : pInfo.factor);
+          // Deduct using base units. Recipe need -> base, expressed in pantry unit.
+          const rFactor = sameFamily ? nUnitInfo(ing.unit).factor : 1;
+          const pFactor = sameFamily ? nUnitInfo(pItem.unit).factor : (PLAIN_COUNT_LABELS.has((pItem.unit||"").toLowerCase().trim()) ? 1 : nUnitInfo(pItem.unit).factor);
           const needBase = need * rFactor;
           const haveBase = pItem.qty * pFactor;
           const deduct = round1(needBase / pFactor);
           const after = round1(Math.max(0, haveBase - needBase) / pFactor);
-          tracked.push({ id: pItem.id, name: ing.name, unit: pItem.unit, deduct, have: pItem.qty, after });
+          tracked.push({ id: pItem.id, name: ing.itemDisplay, unit: pItem.unit, deduct, have: pItem.qty, after });
         } else {
-          untracked.push({ name: ing.name, reason: "unit mismatch", qty: need, unit: ing.unit });
+          untracked.push({ name: ing.itemDisplay, reason: "unit mismatch", qty: need, unit: ing.unit });
         }
       } else {
-        untracked.push({ name: ing.name, reason: "not in pantry", qty: need, unit: ing.unit });
+        untracked.push({ name: ing.itemDisplay, reason: "not in pantry", qty: need, unit: ing.unit });
       }
     }
     return { factor, tracked, spices, untracked };
